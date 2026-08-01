@@ -49,6 +49,14 @@ def restore_rng_state(state: dict) -> None:
 
     random.setstate(state["python"])
     np.random.set_state(state["numpy"])
-    torch.set_rng_state(state["torch"])
+    # Checkpoints are normally loaded onto the training device.  In that case
+    # PyTorch also maps RNG tensors to CUDA, while set_rng_state requires a CPU
+    # ByteTensor.  Accept NumPy-backed legacy/checkpoint representations too.
+    torch_state = torch.as_tensor(state["torch"], dtype=torch.uint8, device="cpu")
+    torch.set_rng_state(torch_state)
     if "cuda" in state and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(state["cuda"])
+        cuda_states = [
+            torch.as_tensor(item, dtype=torch.uint8, device="cpu")
+            for item in state["cuda"]
+        ]
+        torch.cuda.set_rng_state_all(cuda_states)
