@@ -1,0 +1,53 @@
+experiment: figure2
+tasks:
+  - hopper-medium-v2
+  - hopper-medium-replay-v2
+  - walker2d-medium-v2
+  - walker2d-medium-replay-v2
+seeds: [0, 1, 2, 3, 4]
+device: cuda:0
+model:
+  hidden_dim: 200
+  rnn_layers: 3
+  residual_blocks: 4
+  dropout: 0.1
+  max_backtrack: 5
+  ensemble_size: 7
+  elite_size: 5
+  ensemble_hidden: [200, 200, 200, 200]
+training:
+  learning_rate: 0.0003
+  batch_size: 256
+  holdout_size: 1000
+  max_epochs: 500
+  adm_patience: 25
+  ensemble_patience: 5
+  ensemble_improvement: 0.01
+  steps_per_epoch: null
+bc:
+  hidden_dims: [256, 256]
+  learning_rate: 0.0003
+  batch_size: 256
+  epochs: 200
+  steps_per_epoch: 1000
+evaluation:
+  starts: 100
+  horizon: 100
+  overflow: 3.4028235e38
+  inference_chunk: 4096
+phase_overrides:
+  smoke:
+    training:
+      max_epochs: 2
+      adm_patience: 1
+      ensemble_patience: 1
+      steps_per_epoch: 4
+    bc:
+      epochs: 1
+      steps_per_epoch: 10
+    evaluation:
+      starts: 8
+      horizon: 5
+  pilot:
+    tasks: [hopper-medium-replay-v2]
+    seeds: [0]

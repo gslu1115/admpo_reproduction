@@ -1,0 +1,4 @@
+# Smoke 参数由两个正式配置中的 phase_overrides.smoke 定义。
+# 本文件仅作为人工检查入口，防止 smoke 配置被误认为正式结果。
+phase: smoke
+publish_results: false

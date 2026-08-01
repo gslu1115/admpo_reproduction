@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+.mypy_cache/
+.ruff_cache/
+.venv/
+runs/
+*.pt
+*.pth
+*.hdf5
+*.h5
+*.log
+results/**/smoke_*
+results/manifests/*-smoke.json

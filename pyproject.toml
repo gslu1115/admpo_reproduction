@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "admpo-repro"
+version = "0.1.0"
+description = "Reproduction of Figure 2 and Figure 4 from the ADMPO paper"
+requires-python = ">=3.9,<3.10"
+dependencies = [
+  "numpy==1.26.3",
+  "PyYAML==6.0.1",
+  "matplotlib==3.8.2",
+]
+
+[project.scripts]
+admpo-repro = "admpo_repro.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+  "ignore::DeprecationWarning:matplotlib.*",
+  "ignore::DeprecationWarning:pyparsing.*",
+  "ignore::pyparsing.exceptions.PyparsingDeprecationWarning",
+]

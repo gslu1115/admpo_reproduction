@@ -1,0 +1,3 @@
+[submodule "vendor/ADMPO"]
+	path = vendor/ADMPO
+	url = https://github.com/HxLyn3/ADMPO.git
