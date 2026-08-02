@@ -237,6 +237,16 @@ def _update_best_members(
             best[key] = value.clone()
 
 
+def _ensemble_member_improved(new: float, old: float, threshold: float) -> bool:
+    """Return whether a finite validation loss improves an ensemble member."""
+    if not np.isfinite(new):
+        return False
+    if not np.isfinite(old):
+        return True
+    denominator = max(abs(old), np.finfo(np.float64).eps)
+    return (old - new) / denominator > threshold
+
+
 def train_ensemble(
     model: EnsembleDynamics,
     dataset: D4RLDataset,
@@ -302,7 +312,7 @@ def train_ensemble(
         validation = _validate_ensemble(model, dataset, holdout_pool, device)
         improved = [
             i for i, (new, old) in enumerate(zip(validation, best_losses))
-            if (old - new) / old > improvement_threshold
+            if _ensemble_member_improved(new, old, improvement_threshold)
         ]
         if improved:
             _update_best_members(best_state, model.state_dict(), improved, size)
