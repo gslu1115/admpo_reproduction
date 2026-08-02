@@ -2,7 +2,7 @@
 
 本项目复现论文 *Any-step Dynamics Model Improves Future Predictions for Online and Offline Reinforcement Learning* 的两个主文实验：Figure 2 的长期动力学预测误差，以及 Figure 4 的模型误差—不确定性相关性。
 
-> 当前状态：代码与实验协议已实现，环境门、smoke、pilot 和五种子正式结果将按顺序写入本仓库。正式结果生成前，README 不预填论文数值，也不把 smoke 输出当作复现结果。
+> 当前状态：代码与完整五种子协议均已保留。受 48 小时提交期限约束，本次实际成果采用独立的 `deadline48h` 配置；README 不把 smoke 或未完成的长跑输出当作最终结果。
 
 ## 复现范围
 
@@ -12,6 +12,14 @@
 - 目标：复现主要趋势和结论，不要求与论文像素级或数值级一致。
 
 本项目不复现论文的在线学习实验、D4RL/NeoRL 完整性能表、附录消融实验或其他基线。
+
+### 本次 48 小时复现范围
+
+- Figure 2：仅保留 `hopper-medium-replay-v2` 与 `walker2d-medium-replay-v2`，种子为 `0, 1, 2`；输出两面板图并报告三种子均值与 SEM。
+- Figure 4：仅保留 `hopper-medium-replay-v2` 的 ADM/Ensemble 两个面板，种子为 `0, 1`。
+- Figure 2 的 ADM/RNN 最多训练 120 epochs、早停耐心 15，BC 训练 100 epochs；ensemble 保持原早停配置。
+- ADMPO-OFF 训练截断为 1250 epochs，但余弦学习率调度仍采用原 5000-epoch 时间尺度。
+- 该结果属于“限时部分复现”，不得表述为论文四任务、五种子的完整统计复现。
 
 ## 环境与硬件
 
@@ -71,11 +79,20 @@ python -m admpo_repro run figure2 --phase full --seeds 0 1 2 3 4 --resume
 python -m admpo_repro run figure4 --phase full --seeds 0 1 2 3 4 --resume
 ```
 
+48 小时限时实验：
+
+```bash
+python -m admpo_repro run figure2 --phase deadline48h --seeds 0 1 2 --resume
+python -m admpo_repro run figure4 --phase deadline48h --seeds 0 1 --resume
+```
+
 从已有 CSV 重绘图片：
 
 ```bash
 python -m admpo_repro plot figure2
 python -m admpo_repro plot figure4
+python -m admpo_repro plot figure2 --phase deadline48h
+python -m admpo_repro plot figure4 --phase deadline48h
 ```
 
 ## 实验口径
@@ -106,6 +123,8 @@ python -m admpo_repro plot figure4
 - `results/figure4/correlations.csv`
 - 每个任务、模型、种子的结论对照及运行耗时
 
+限时结果使用 `deadline48h_` 前缀，例如 `deadline48h_figure2.png`、`deadline48h_figure4.pdf` 和 `deadline48h_correlations.csv`，避免与完整五种子结果混合。
+
 在五种子结果完整前，不对“复现成功”作结论。
 
 ## 目录与产物策略
@@ -123,6 +142,6 @@ python -m admpo_repro plot figure4
 - D4RL 没有提供 medium/replay 数据集实际行为策略的可调用模型，因此主实验使用 BC 作为行为策略代理，并保留 dataset-direct 诊断。
 - Hopper/Walker 的 Gym observation 会把速度裁剪到 `[-10, 10]`；被裁剪的 observation 不再包含可精确恢复的完整 MuJoCo 状态。Oracle 环境门只在速度未触及裁剪边界的连续转移上验证，并在 manifest 记录排除数量。
 - 论文不公开原始种子，本项目预先固定为 `0–4`。
-- 8 GB 显存下只串行运行一个训练进程；完整五种子实验预计需要约 2–3 周，最终以 pilot 实测时间为准。
+- 8 GB 显存下只串行运行一个训练进程；完整五种子实验实测预计需要约 2–3 周。本次 `deadline48h` 配置预计约 36–43 小时，但仍取决于早停轮数。
 
 第三方版本与用途见 [THIRD_PARTY.md](THIRD_PARTY.md)。

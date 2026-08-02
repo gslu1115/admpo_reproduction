@@ -202,7 +202,9 @@ def train_admpo(
     real_buffer, model_buffer = _build_buffers(dataset, config)
     adm_state = torch.load(adm_checkpoint, map_location=device)["model"]
     agent.dynamics.load_state_dict(_convert_adm_state(adm_state), strict=True)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(agent.actor_optim, int(cfg["epochs"]))
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        agent.actor_optim, int(cfg.get("scheduler_epochs", cfg["epochs"]))
+    )
     records: list[dict] = []
     start_epoch = 0
     checkpoints = sorted(output_dir.glob("epoch-*.pt"))

@@ -51,3 +51,11 @@ phase_overrides:
   pilot:
     tasks: [hopper-medium-replay-v2]
     seeds: [0]
+  deadline48h:
+    tasks: [hopper-medium-replay-v2, walker2d-medium-replay-v2]
+    seeds: [0, 1, 2]
+    training:
+      max_epochs: 120
+      adm_patience: 15
+    bc:
+      epochs: 100

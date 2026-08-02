@@ -30,27 +30,46 @@ def _read_csvs(paths: list[Path]) -> list[dict[str, str]]:
     return rows
 
 
+def _phase_paths(paths: list[Path], prefix: str) -> list[Path]:
+    if prefix:
+        return [path for path in paths if path.name.startswith(prefix)]
+    reserved = ("smoke_", "deadline48h_")
+    return [path for path in paths if not path.name.startswith(reserved)]
+
+
+def _present_tasks(rows: list[dict[str, str]], preferred: tuple[str, ...]) -> list[str]:
+    present = {row["task"] for row in rows}
+    return [task for task in preferred if task in present]
+
+
 def plot_figure2(root: Path, prefix: str = "") -> tuple[Path, Path]:
     result_dir = root / "results" / "figure2"
     paths = sorted((result_dir / "per_seed").glob("*.csv"))
-    paths = [path for path in paths if path.name.startswith(prefix)] if prefix else [path for path in paths if not path.name.startswith("smoke_")]
+    paths = _phase_paths(paths, prefix)
     rows = _read_csvs(paths)
-    tasks = [
+    tasks = _present_tasks(rows, (
         "hopper-medium-v2",
         "hopper-medium-replay-v2",
         "walker2d-medium-v2",
         "walker2d-medium-replay-v2",
-    ]
+    ))
+    if not tasks:
+        raise RuntimeError(f"no Figure 2 CSV rows found for prefix {prefix!r}")
     grouped: dict[tuple[str, str, int], list[float]] = defaultdict(list)
     for row in rows:
         grouped[(row["task"], row["model"], int(row["rollout_length"]))].append(float(row["error_mean"]))
     summary_rows = []
-    fig, axes = plt.subplots(1, 4, figsize=(15.5, 3.6), sharey=False)
+    fig, axes_grid = plt.subplots(
+        1, len(tasks), figsize=(3.9 * len(tasks), 3.6), sharey=False, squeeze=False
+    )
+    axes = axes_grid[0]
     for axis, task in zip(axes, tasks):
+        task_steps: set[int] = set()
         for model in ("adm", "ensemble", "rnn"):
             steps = sorted(k[2] for k in grouped if k[0] == task and k[1] == model)
             if not steps:
                 continue
+            task_steps.update(steps)
             means, sems = [], []
             for step in steps:
                 values = np.asarray(grouped[(task, model, step)], dtype=np.float64)
@@ -76,8 +95,8 @@ def plot_figure2(root: Path, prefix: str = "") -> tuple[Path, Path]:
         axis.set_xlabel("Roll-out Length")
         axis.set_ylabel("Prediction Error")
         axis.set_yscale("log")
-        if steps:
-            axis.set_xlim(0, max(steps))
+        if task_steps:
+            axis.set_xlim(0, max(task_steps))
         axis.grid(True, which="both", alpha=0.18)
     handles, labels = axes[0].get_legend_handles_labels()
     if handles:
@@ -111,10 +130,14 @@ def _correlation(rows: list[dict[str, str]]) -> float:
 def plot_figure4(root: Path, prefix: str = "") -> tuple[Path, Path]:
     result_dir = root / "results" / "figure4"
     paths = sorted((result_dir / "points").glob("*.csv"))
-    paths = [path for path in paths if path.name.startswith(prefix)] if prefix else [path for path in paths if not path.name.startswith("smoke_")]
+    paths = _phase_paths(paths, prefix)
     rows = _read_csvs(paths)
     rows = [row for row in rows if row["policy"] in POLICY_LABELS]
-    tasks = ["hopper-medium-replay-v2", "walker2d-medium-replay-v2"]
+    tasks = _present_tasks(
+        rows, ("hopper-medium-replay-v2", "walker2d-medium-replay-v2")
+    )
+    if not tasks:
+        raise RuntimeError(f"no Figure 4 CSV rows found for prefix {prefix!r}")
     correlations = []
     for task in tasks:
         for model in ("adm", "ensemble"):
@@ -123,7 +146,11 @@ def plot_figure4(root: Path, prefix: str = "") -> tuple[Path, Path]:
             for seed in sorted({int(row["seed"]) for row in selected}):
                 seed_rows = [row for row in selected if int(row["seed"]) == seed]
                 correlations.append({"task": task, "model": model, "seed": seed, "pearson_r": _correlation(seed_rows), "n": len(seed_rows)})
-    fig, axes = plt.subplots(1, 4, figsize=(15.5, 3.7))
+    panel_count = 2 * len(tasks)
+    fig, axes_grid = plt.subplots(
+        1, panel_count, figsize=(3.9 * panel_count, 3.7), squeeze=False
+    )
+    axes = axes_grid[0]
     position = 0
     for task in tasks:
         for model in ("adm", "ensemble"):
@@ -146,8 +173,9 @@ def plot_figure4(root: Path, prefix: str = "") -> tuple[Path, Path]:
             axis.set_xlabel("Model Error")
             axis.set_ylabel("Model Uncertainty")
             axis.grid(True, alpha=0.16)
-    fig.text(0.255, 0.115, tasks[0], ha="center", va="top", fontsize=9)
-    fig.text(0.755, 0.115, tasks[1], ha="center", va="top", fontsize=9)
+    for index, task in enumerate(tasks):
+        center = (2 * index + 1) / panel_count
+        fig.text(center, 0.115, task, ha="center", va="top", fontsize=9)
     handles, labels = axes[0].get_legend_handles_labels()
     if handles:
         fig.legend(handles, labels, loc="lower center", ncol=3, frameon=False)

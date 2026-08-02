@@ -30,7 +30,13 @@ from admpo_repro.runtime import seed_everything
 
 
 def _scope(phase: str) -> str:
-    return "smoke" if phase == "smoke" else "full"
+    if phase in ("smoke", "deadline48h"):
+        return phase
+    return "full"
+
+
+def _result_prefix(phase: str) -> str:
+    return f"{phase}_" if phase in ("smoke", "deadline48h") else ""
 
 
 def _run_dir(root: Path, phase: str, task: str, seed: int) -> Path:
@@ -38,8 +44,7 @@ def _run_dir(root: Path, phase: str, task: str, seed: int) -> Path:
 
 
 def _result_name(phase: str, task: str, seed: int) -> str:
-    prefix = "smoke_" if phase == "smoke" else ""
-    return f"{prefix}{task}_seed-{seed}.csv"
+    return f"{_result_prefix(phase)}{task}_seed-{seed}.csv"
 
 
 def _train_figure2_models(
@@ -117,7 +122,7 @@ def run_figure2(config: dict, resume: bool) -> None:
             )
     manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
     write_manifest(root / "results" / "manifests" / f"figure2-{config['phase']}.json", manifest)
-    plot_figure2(root, "smoke_" if config["phase"] == "smoke" else "")
+    plot_figure2(root, _result_prefix(config["phase"]))
 
 
 def run_figure4(config: dict, resume: bool) -> None:
@@ -181,7 +186,7 @@ def run_figure4(config: dict, resume: bool) -> None:
             )
     manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
     write_manifest(root / "results" / "manifests" / f"figure4-{config['phase']}.json", manifest)
-    plot_figure4(root, "smoke_" if config["phase"] == "smoke" else "")
+    plot_figure4(root, _result_prefix(config["phase"]))
 
 
 def run_experiment(experiment: str, phase: str, seeds: list[int], resume: bool) -> None:
@@ -214,6 +219,7 @@ def check_environment(phase: str = "smoke") -> dict:
     return report
 
 
-def plot_experiment(experiment: str) -> tuple[Path, Path]:
-    root = Path(load_config(experiment, "full")["root"])
-    return plot_figure2(root) if experiment == "figure2" else plot_figure4(root)
+def plot_experiment(experiment: str, phase: str = "full") -> tuple[Path, Path]:
+    root = Path(load_config(experiment, phase)["root"])
+    prefix = _result_prefix(phase)
+    return plot_figure2(root, prefix) if experiment == "figure2" else plot_figure4(root, prefix)

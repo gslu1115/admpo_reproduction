@@ -11,11 +11,14 @@ def parser() -> argparse.ArgumentParser:
     commands = root.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="运行 Figure 2 或 Figure 4")
     run.add_argument("experiment", choices=("figure2", "figure4"))
-    run.add_argument("--phase", choices=("smoke", "pilot", "full"), default="smoke")
+    run.add_argument(
+        "--phase", choices=("smoke", "pilot", "deadline48h", "full"), default="smoke"
+    )
     run.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2, 3, 4])
     run.add_argument("--resume", action="store_true")
     plot = commands.add_parser("plot", help="从 CSV 重绘论文风格图")
     plot.add_argument("experiment", choices=("figure2", "figure4"))
+    plot.add_argument("--phase", choices=("deadline48h", "full"), default="full")
     check = commands.add_parser("check", help="检查环境、数据集和 MuJoCo oracle")
     check.add_argument("--phase", choices=("smoke", "full"), default="smoke")
     return root
@@ -30,7 +33,7 @@ def main() -> None:
     if args.command == "run":
         run_experiment(args.experiment, args.phase, args.seeds, args.resume)
     elif args.command == "plot":
-        png, pdf = plot_experiment(args.experiment)
+        png, pdf = plot_experiment(args.experiment, args.phase)
         print(json.dumps({"png": str(png), "pdf": str(pdf)}, ensure_ascii=False))
     else:
         print(json.dumps(check_environment(args.phase), ensure_ascii=False, indent=2))
