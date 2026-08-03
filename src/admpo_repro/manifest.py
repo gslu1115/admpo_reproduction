@@ -26,7 +26,24 @@ def _git(root: Path, *args: str) -> str | None:
         return None
 
 
+def _source_revisions(root: Path) -> dict[str, str]:
+    """Read public commit ids recorded for a Git-free compute snapshot."""
+    path = root / ".source-revisions.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        key: value
+        for key, value in payload.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+
 def environment_manifest(root: Path) -> dict:
+    revisions = _source_revisions(root)
     packages = {}
     for package in (
         "torch", "gym", "gymnasium", "D4RL", "mujoco", "mujoco-py",
@@ -59,8 +76,13 @@ def environment_manifest(root: Path) -> dict:
         "gpu": gpu,
         "driver": driver,
         "cuda": cuda,
-        "repository_commit": _git(root, "rev-parse", "HEAD"),
-        "vendor_admpo_commit": _git(root / "vendor" / "ADMPO", "rev-parse", "HEAD"),
+        "repository_commit": (
+            _git(root, "rev-parse", "HEAD") or revisions.get("repository_commit")
+        ),
+        "vendor_admpo_commit": (
+            _git(root / "vendor" / "ADMPO", "rev-parse", "HEAD")
+            or revisions.get("vendor_admpo_commit")
+        ),
     }
 
 
