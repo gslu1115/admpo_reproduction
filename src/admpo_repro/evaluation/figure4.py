@@ -10,11 +10,29 @@ import torch
 from admpo_repro.data import D4RLDataset
 from admpo_repro.dynamics.models import ADMDynamics, EnsembleDynamics
 
-from .figure2 import _initial_histories
 from .oracle import MujocoOracle, termination
 
 
 ActionFunction = Callable[[np.ndarray], np.ndarray]
+
+
+def _initial_histories(
+    dataset: D4RLDataset, starts: int, history: int, seed: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Legacy model-rollout initialization used only by Figure 4."""
+    pool = dataset.valid_starts(history, 0, dataset.size)
+    rng = np.random.default_rng(seed)
+    indexes = rng.choice(pool, size=starts, replace=pool.size < starts)
+    seq = dataset.sequences(indexes, history)
+    obs_hist = np.concatenate(
+        (seq["observations"][:, :1], seq["next_observations"]), axis=1
+    )[:, -history:]
+    act_hist = (
+        seq["actions"][:, -(history - 1) :]
+        if history > 1
+        else seq["actions"][:, :0]
+    )
+    return obs_hist.astype(np.float32), act_hist.astype(np.float32)
 
 
 @torch.no_grad()

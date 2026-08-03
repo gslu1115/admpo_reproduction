@@ -14,12 +14,20 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--phase", choices=("smoke", "pilot", "deadline48h", "full"), default="smoke"
     )
-    run.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2, 3, 4])
+    run.add_argument("--seeds", type=int, nargs="+", default=None)
+    run.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help="Figure 2 并行进程数；0 表示按显存自动选择",
+    )
     run.add_argument("--resume", action="store_true")
     plot = commands.add_parser("plot", help="从 CSV 重绘论文风格图")
     plot.add_argument("experiment", choices=("figure2", "figure4"))
-    plot.add_argument("--phase", choices=("deadline48h", "full"), default="full")
-    check = commands.add_parser("check", help="检查环境、数据集和 MuJoCo oracle")
+    plot.add_argument(
+        "--phase", choices=("smoke", "pilot", "deadline48h", "full"), default="full"
+    )
+    check = commands.add_parser("check", help="检查环境、缓存数据集和轨迹划分")
     check.add_argument("--phase", choices=("smoke", "full"), default="smoke")
     return root
 
@@ -31,7 +39,7 @@ def main() -> None:
     from admpo_repro.runner import check_environment, plot_experiment, run_experiment
 
     if args.command == "run":
-        run_experiment(args.experiment, args.phase, args.seeds, args.resume)
+        run_experiment(args.experiment, args.phase, args.seeds, args.resume, args.workers)
     elif args.command == "plot":
         png, pdf = plot_experiment(args.experiment, args.phase)
         print(json.dumps({"png": str(png), "pdf": str(pdf)}, ensure_ascii=False))

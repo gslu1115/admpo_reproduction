@@ -1,11 +1,16 @@
 experiment: figure2
+protocol: heldout-trajectory-actions-v1
+artifact_namespace: trajectory_80_10_10_3seeds
 tasks:
-  - hopper-medium-v2
   - hopper-medium-replay-v2
-  - walker2d-medium-v2
   - walker2d-medium-replay-v2
-seeds: [0, 1, 2, 3, 4]
+seeds: [0, 1, 2]
 device: cuda:0
+split:
+  train: 0.8
+  validation: 0.1
+  test: 0.1
+  seed: 202405
 model:
   hidden_dim: 200
   rnn_layers: 3
@@ -18,12 +23,14 @@ model:
 training:
   learning_rate: 0.0003
   batch_size: 256
-  holdout_size: 1000
   max_epochs: 500
   adm_patience: 25
   ensemble_patience: 5
   ensemble_improvement: 0.01
+  validation_samples: 4096
   steps_per_epoch: null
+# Figure 2 does not train BC. This section remains only because Figure 4 reuses
+# the corrected dynamics checkpoints and still needs a behavior-policy proxy.
 bc:
   hidden_dims: [256, 256]
   learning_rate: 0.0003
@@ -33,8 +40,14 @@ bc:
 evaluation:
   starts: 100
   horizon: 100
+  window_seed: 202405
   overflow: 3.4028235e38
   inference_chunk: 4096
+parallel:
+  max_workers: 6
+  sequence_workers_32gb: 6
+  ensemble_workers_32gb: 3
+  cpu_threads_per_worker: 4
 phase_overrides:
   smoke:
     training:
@@ -51,11 +64,3 @@ phase_overrides:
   pilot:
     tasks: [hopper-medium-replay-v2]
     seeds: [0]
-  deadline48h:
-    tasks: [hopper-medium-replay-v2, walker2d-medium-replay-v2]
-    seeds: [0, 1, 2]
-    training:
-      max_epochs: 120
-      adm_patience: 15
-    bc:
-      epochs: 100

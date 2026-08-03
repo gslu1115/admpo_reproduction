@@ -13,14 +13,14 @@
 
 - 仓库：https://github.com/LAMDA-RL/adm2
 - 参考提交：`5690f37df2175615754190d0172e380c5a31e139`
-- 用途：原论文仓库缺失的 bootstrapping RNN、ensemble、MuJoCo oracle、rollout MSE 与均值分歧不确定性实现口径。
+- 用途：原论文仓库缺失的 bootstrapping RNN、ensemble、测试轨迹动作序列上的 rollout MSE，以及 Figure 4 的 MuJoCo oracle 与均值分歧不确定性实现口径。
 - 形式：仅作实现参考，不作为 vendor 或运行依赖。
 
 ## OfflineRL-Kit
 
 - 仓库：https://github.com/yihaosun1124/OfflineRL-Kit
 - 参考提交：`951302eed019f047c490cfe05b23beb2cf29f714`
-- 用途：7-model/5-elite ensemble 配置和 BC 训练设置。
+- 用途：7-model/5-elite ensemble 配置，以及仅用于 Figure 4 的 BC 训练设置。
 - 形式：仅作实现参考，不作为 vendor 或运行依赖。
 
 ## D4RL 与 MuJoCo

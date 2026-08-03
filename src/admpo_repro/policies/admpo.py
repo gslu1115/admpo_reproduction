@@ -200,7 +200,7 @@ def train_admpo(
     output_dir.mkdir(parents=True, exist_ok=True)
     agent = _build_agent(dataset, env, config)
     real_buffer, model_buffer = _build_buffers(dataset, config)
-    adm_state = torch.load(adm_checkpoint, map_location=device)["model"]
+    adm_state = torch.load(adm_checkpoint, map_location=device, weights_only=False)["model"]
     agent.dynamics.load_state_dict(_convert_adm_state(adm_state), strict=True)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         agent.actor_optim, int(cfg.get("scheduler_epochs", cfg["epochs"]))
@@ -209,7 +209,7 @@ def train_admpo(
     start_epoch = 0
     checkpoints = sorted(output_dir.glob("epoch-*.pt"))
     if resume and checkpoints:
-        state = torch.load(checkpoints[-1], map_location=device)
+        state = torch.load(checkpoints[-1], map_location=device, weights_only=False)
         _restore_agent(agent, state["agent"])
         _restore_buffer(model_buffer, state["model_buffer"])
         scheduler.load_state_dict(state["scheduler"])
@@ -297,7 +297,7 @@ def load_learned_policy(
     checkpoint: Path,
 ) -> Callable[[np.ndarray], np.ndarray]:
     agent = _build_agent(dataset, env, config)
-    payload = torch.load(checkpoint, map_location=config["device"])
+    payload = torch.load(checkpoint, map_location=config["device"], weights_only=False)
     agent.actor.load_state_dict(payload["actor"])
     agent.eval()
 

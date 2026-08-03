@@ -2,19 +2,26 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 
-from admpo_repro.data import D4RLDataset
+from admpo_repro.data import D4RLDataset, TrajectorySplit
 from admpo_repro.runtime import capture_rng_state, restore_rng_state
 
 from .models import ADMDynamics, EnsembleDynamics, RNNDynamics
 
 
-def build_dynamics(kind: str, dataset: D4RLDataset, config: dict, device: str) -> torch.nn.Module:
+def build_dynamics(
+    kind: str,
+    dataset: D4RLDataset,
+    config: dict,
+    device: str,
+    statistics_indices: np.ndarray | None = None,
+) -> torch.nn.Module:
     model_cfg = config["model"]
     if kind == "adm":
         model = ADMDynamics(
@@ -45,7 +52,7 @@ def build_dynamics(kind: str, dataset: D4RLDataset, config: dict, device: str) -
     else:
         raise ValueError(f"unknown dynamics kind: {kind}")
     model.to(device)
-    model.set_statistics(*dataset.statistics())
+    model.set_statistics(*dataset.statistics(statistics_indices))
     return model
 
 
@@ -56,10 +63,27 @@ def _atomic_torch_save(payload: dict, path: Path) -> None:
     temporary.replace(path)
 
 
+def _atomic_json_save(payload: dict, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    temporary.replace(path)
+
+
 def _sample_starts(pool: np.ndarray, batch_size: int, rng: np.random.Generator) -> np.ndarray:
     if pool.size == 0:
         raise RuntimeError("no valid sequences available; dataset boundary logic is invalid")
     return rng.choice(pool, size=batch_size, replace=pool.size < batch_size)
+
+
+def _fixed_subset(pool: np.ndarray, count: int) -> np.ndarray:
+    """Select a deterministic, evenly spread validation subset."""
+    if pool.size <= count:
+        return pool
+    positions = np.linspace(0, pool.size - 1, num=count, dtype=np.int64)
+    return pool[positions]
 
 
 @torch.no_grad()
@@ -67,16 +91,23 @@ def _validate_sequence_model(
     model: torch.nn.Module,
     dataset: D4RLDataset,
     kind: str,
-    split: int,
+    split: TrajectorySplit,
     max_backtrack: int,
-    batch_size: int,
+    validation_samples: int,
     device: str,
+    validation_pools: dict[int, np.ndarray] | None = None,
 ) -> list[float]:
     model.eval()
     losses: list[float] = []
     for k in range(1, max_backtrack + 1):
-        pool = dataset.valid_starts(k, split, dataset.size)
-        starts = pool[: min(pool.size, max(batch_size, 4096))]
+        pool = (
+            validation_pools[k]
+            if validation_pools is not None
+            else split.valid_starts("validation", k)
+        )
+        starts = _fixed_subset(pool, validation_samples)
+        if starts.size == 0:
+            raise RuntimeError(f"validation split has no valid sequence of length {k}")
         seq = dataset.sequences(starts, k)
         obs = torch.as_tensor(seq["observations"], device=device)
         actions = torch.as_tensor(seq["actions"], device=device)
@@ -103,12 +134,12 @@ def train_sequence_model(
     seed: int,
     checkpoint: Path,
     resume: bool,
+    split: TrajectorySplit,
 ) -> dict[str, Any]:
     train_cfg = config["training"]
     device = config["device"]
     batch_size = int(train_cfg["batch_size"])
     max_backtrack = int(config["model"]["max_backtrack"])
-    split = dataset.split_point(int(train_cfg["holdout_size"]))
     optimizer = torch.optim.Adam(model.parameters(), lr=float(train_cfg["learning_rate"]))
     patience = int(train_cfg["adm_patience"])
     best_losses = [float("inf")] * max_backtrack
@@ -116,9 +147,14 @@ def train_sequence_model(
     stale = 0
     start_epoch = 0
     history: list[dict[str, Any]] = []
+    split_metadata = split.to_dict()
+    rng = np.random.default_rng(seed)
     last_path = checkpoint.with_name(checkpoint.stem + ".last.pt")
+    progress_path = checkpoint.with_name(checkpoint.stem + ".progress.json")
     if resume and last_path.exists():
-        state = torch.load(last_path, map_location=device)
+        state = torch.load(last_path, map_location=device, weights_only=False)
+        if state.get("split") != split_metadata:
+            raise RuntimeError(f"refusing to resume {last_path} with a different trajectory split")
         model.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
         best_state = state["best_state"]
@@ -127,16 +163,26 @@ def train_sequence_model(
         start_epoch = state["epoch"] + 1
         history = state["history"]
         restore_rng_state(state["rng"])
+        if "generator_state" in state:
+            rng.bit_generator.state = state["generator_state"]
     steps = train_cfg.get("steps_per_epoch")
-    default_steps = max(1, split // batch_size) * (max_backtrack if kind == "adm" else 1)
+    train_size = split.indices("train").size
+    # ADM and the RNN baseline receive the same number of optimizer updates.
+    default_steps = max(1, train_size // batch_size)
     steps_per_epoch = int(steps if steps is not None else default_steps)
-    rng = np.random.default_rng(seed + start_epoch * 100003)
+    train_pools = {
+        k: split.valid_starts("train", k) for k in range(1, max_backtrack + 1)
+    }
+    validation_pools = {
+        k: split.valid_starts("validation", k)
+        for k in range(1, max_backtrack + 1)
+    }
     for epoch in range(start_epoch, int(train_cfg["max_epochs"])):
         model.train()
         epoch_losses = []
         for _ in range(steps_per_epoch):
             k = int(rng.integers(1, max_backtrack + 1))
-            pool = dataset.valid_starts(k, 0, split)
+            pool = train_pools[k]
             seq = dataset.sequences(_sample_starts(pool, batch_size, rng), k)
             obs = torch.as_tensor(seq["observations"], device=device)
             actions = torch.as_tensor(seq["actions"], device=device)
@@ -157,7 +203,14 @@ def train_sequence_model(
             optimizer.step()
             epoch_losses.append(float(loss.detach().cpu()))
         validation = _validate_sequence_model(
-            model, dataset, kind, split, max_backtrack, batch_size, device
+            model,
+            dataset,
+            kind,
+            split,
+            max_backtrack,
+            int(train_cfg.get("validation_samples", 4096)),
+            device,
+            validation_pools,
         )
         improved = np.mean(validation) < np.mean(best_losses)
         if improved:
@@ -180,8 +233,26 @@ def train_sequence_model(
                 "stale": stale,
                 "history": history,
                 "rng": capture_rng_state(),
+                "generator_state": rng.bit_generator.state,
+                "split": split_metadata,
             },
             last_path,
+        )
+        _atomic_json_save(
+            {
+                "status": "training",
+                "kind": kind,
+                "task": dataset.task,
+                "seed": seed,
+                "epoch": epoch,
+                "max_epochs": int(train_cfg["max_epochs"]),
+                "stale_epochs": stale,
+                "patience": patience,
+                "train_loss": float(np.mean(epoch_losses)),
+                "validation": validation,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            progress_path,
         )
         if stale >= patience:
             break
@@ -193,8 +264,21 @@ def train_sequence_model(
         "history": history,
         "seed": seed,
         "task": dataset.task,
+        "split": split_metadata,
     }
     _atomic_torch_save(payload, checkpoint)
+    _atomic_json_save(
+        {
+            "status": "complete",
+            "kind": kind,
+            "task": dataset.task,
+            "seed": seed,
+            "epochs_completed": len(history),
+            "best_validation": best_losses,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+        progress_path,
+    )
     checkpoint.with_suffix(".json").write_text(
         json.dumps({k: v for k, v in payload.items() if k != "model"}, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -254,13 +338,17 @@ def train_ensemble(
     seed: int,
     checkpoint: Path,
     resume: bool,
+    split: TrajectorySplit,
 ) -> dict[str, Any]:
     cfg = config["training"]
     device = config["device"]
     batch_size = int(cfg["batch_size"])
-    split = dataset.split_point(int(cfg["holdout_size"]))
-    train_pool = np.arange(split, dtype=np.int64)
-    holdout_pool = np.arange(split, dataset.size, dtype=np.int64)
+    train_pool = split.indices("train")
+    holdout_pool = _fixed_subset(
+        split.indices("validation"), int(cfg.get("validation_samples", 4096))
+    )
+    if train_pool.size == 0 or holdout_pool.size == 0:
+        raise RuntimeError("trajectory split produced an empty train or validation partition")
     optimizer = torch.optim.Adam(model.parameters(), lr=float(cfg["learning_rate"]))
     size = model.model.size
     best_losses = [float("inf")] * size
@@ -268,9 +356,14 @@ def train_ensemble(
     stale = 0
     start_epoch = 0
     history: list[dict[str, Any]] = []
+    split_metadata = split.to_dict()
+    rng = np.random.default_rng(seed)
     last_path = checkpoint.with_name(checkpoint.stem + ".last.pt")
+    progress_path = checkpoint.with_name(checkpoint.stem + ".progress.json")
     if resume and last_path.exists():
-        state = torch.load(last_path, map_location=device)
+        state = torch.load(last_path, map_location=device, weights_only=False)
+        if state.get("split") != split_metadata:
+            raise RuntimeError(f"refusing to resume {last_path} with a different trajectory split")
         model.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
         best_state = state["best_state"]
@@ -279,7 +372,8 @@ def train_ensemble(
         start_epoch = state["epoch"] + 1
         history = state["history"]
         restore_rng_state(state["rng"])
-    rng = np.random.default_rng(seed + start_epoch * 100003)
+        if "generator_state" in state:
+            rng.bit_generator.state = state["generator_state"]
     steps = cfg.get("steps_per_epoch")
     steps_per_epoch = int(steps if steps is not None else max(1, split // batch_size))
     improvement_threshold = float(cfg["ensemble_improvement"])
@@ -335,8 +429,26 @@ def train_ensemble(
                 "stale": stale,
                 "history": history,
                 "rng": capture_rng_state(),
+                "generator_state": rng.bit_generator.state,
+                "split": split_metadata,
             },
             last_path,
+        )
+        _atomic_json_save(
+            {
+                "status": "training",
+                "kind": "ensemble",
+                "task": dataset.task,
+                "seed": seed,
+                "epoch": epoch,
+                "max_epochs": int(cfg["max_epochs"]),
+                "stale_epochs": stale,
+                "patience": int(cfg["ensemble_patience"]),
+                "train_loss": float(np.mean(epoch_losses)),
+                "validation": validation,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            progress_path,
         )
         if stale >= int(cfg["ensemble_patience"]):
             break
@@ -351,8 +463,22 @@ def train_ensemble(
         "history": history,
         "seed": seed,
         "task": dataset.task,
+        "split": split_metadata,
     }
     _atomic_torch_save(payload, checkpoint)
+    _atomic_json_save(
+        {
+            "status": "complete",
+            "kind": "ensemble",
+            "task": dataset.task,
+            "seed": seed,
+            "epochs_completed": len(history),
+            "best_validation": best_losses,
+            "elites": elite.tolist(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+        progress_path,
+    )
     checkpoint.with_suffix(".json").write_text(
         json.dumps({k: v for k, v in payload.items() if k != "model"}, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -364,7 +490,7 @@ def load_dynamics_checkpoint(
     kind: str, dataset: D4RLDataset, config: dict, path: Path
 ) -> torch.nn.Module:
     model = build_dynamics(kind, dataset, config, config["device"])
-    payload = torch.load(path, map_location=config["device"])
+    payload = torch.load(path, map_location=config["device"], weights_only=False)
     model.load_state_dict(payload["model"])
     model.eval()
     return model

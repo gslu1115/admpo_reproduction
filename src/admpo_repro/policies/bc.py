@@ -70,7 +70,7 @@ def train_bc(
     history: list[dict[str, float]] = []
     last_path = checkpoint.with_name(checkpoint.stem + ".last.pt")
     if resume and last_path.exists():
-        state = torch.load(last_path, map_location=device)
+        state = torch.load(last_path, map_location=device, weights_only=False)
         policy.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
         start_epoch = state["epoch"] + 1
@@ -124,6 +124,8 @@ def load_bc(
         env.action_space.high,
         cfg["hidden_dims"],
     ).to(config["device"])
-    policy.load_state_dict(torch.load(checkpoint, map_location=config["device"])["model"])
+    policy.load_state_dict(
+        torch.load(checkpoint, map_location=config["device"], weights_only=False)["model"]
+    )
     policy.eval()
     return policy

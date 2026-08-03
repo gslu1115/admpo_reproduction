@@ -30,7 +30,7 @@ def environment_manifest(root: Path) -> dict:
     packages = {}
     for package in (
         "torch", "gym", "gymnasium", "D4RL", "mujoco", "mujoco-py",
-        "numpy", "matplotlib", "PyYAML", "Cython", "tensorboard",
+        "numpy", "h5py", "matplotlib", "PyYAML", "Cython", "tensorboard",
     ):
         try:
             packages[package] = importlib.metadata.version(package)

@@ -42,8 +42,10 @@ def _present_tasks(rows: list[dict[str, str]], preferred: tuple[str, ...]) -> li
     return [task for task in preferred if task in present]
 
 
-def plot_figure2(root: Path, prefix: str = "") -> tuple[Path, Path]:
-    result_dir = root / "results" / "figure2"
+def plot_figure2(
+    root: Path, prefix: str = "", result_dir: Path | None = None
+) -> tuple[Path, Path]:
+    result_dir = root / "results" / "figure2" if result_dir is None else result_dir
     paths = sorted((result_dir / "per_seed").glob("*.csv"))
     paths = _phase_paths(paths, prefix)
     rows = _read_csvs(paths)
@@ -70,15 +72,17 @@ def plot_figure2(root: Path, prefix: str = "") -> tuple[Path, Path]:
             if not steps:
                 continue
             task_steps.update(steps)
-            means, sems = [], []
+            means, stds, sems = [], [], []
             for step in steps:
                 values = np.asarray(grouped[(task, model, step)], dtype=np.float64)
                 mean = float(np.mean(values))
+                std = float(np.std(values, ddof=1)) if values.size > 1 else 0.0
                 sem = float(np.std(values, ddof=1) / math.sqrt(values.size)) if values.size > 1 else 0.0
                 means.append(max(mean, np.finfo(np.float32).tiny))
+                stds.append(std)
                 sems.append(sem)
                 summary_rows.append(
-                    {"task": task, "model": model, "rollout_length": step, "mean": mean, "sem": sem, "n_seeds": values.size}
+                    {"task": task, "model": model, "rollout_length": step, "mean": mean, "std": std, "sem": sem, "n_seeds": values.size}
                 )
             means_np = np.asarray(means)
             sem_np = np.asarray(sems)
@@ -109,7 +113,7 @@ def plot_figure2(root: Path, prefix: str = "") -> tuple[Path, Path]:
     fig.savefig(pdf, bbox_inches="tight")
     plt.close(fig)
     with (result_dir / f"{prefix}summary.csv").open("w", newline="", encoding="utf-8") as handle:
-        fields = ["task", "model", "rollout_length", "mean", "sem", "n_seeds"]
+        fields = ["task", "model", "rollout_length", "mean", "std", "sem", "n_seeds"]
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(summary_rows)
