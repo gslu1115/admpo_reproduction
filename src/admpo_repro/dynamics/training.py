@@ -331,6 +331,17 @@ def _ensemble_member_improved(new: float, old: float, threshold: float) -> bool:
     return (old - new) / denominator > threshold
 
 
+def _ensemble_steps_per_epoch(
+    configured_steps: int | None,
+    train_pool: np.ndarray,
+    batch_size: int,
+) -> int:
+    """Resolve full-data ensemble updates without depending on split object type."""
+    if configured_steps is not None:
+        return int(configured_steps)
+    return max(1, int(train_pool.size) // batch_size)
+
+
 def train_ensemble(
     model: EnsembleDynamics,
     dataset: D4RLDataset,
@@ -374,8 +385,9 @@ def train_ensemble(
         restore_rng_state(state["rng"])
         if "generator_state" in state:
             rng.bit_generator.state = state["generator_state"]
-    steps = cfg.get("steps_per_epoch")
-    steps_per_epoch = int(steps if steps is not None else max(1, split // batch_size))
+    steps_per_epoch = _ensemble_steps_per_epoch(
+        cfg.get("steps_per_epoch"), train_pool, batch_size
+    )
     improvement_threshold = float(cfg["ensemble_improvement"])
     for epoch in range(start_epoch, int(cfg["max_epochs"])):
         bootstrap = rng.choice(train_pool, size=(size, train_pool.size), replace=True)
