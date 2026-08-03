@@ -18,8 +18,16 @@ MODEL_LABELS = {
     "rnn": "Bootstrapping RNN Dynamics Model",
 }
 MODEL_COLORS = {"adm": "#d62728", "ensemble": "#1f77b4", "rnn": "#2ca02c"}
-POLICY_LABELS = {"random": "random action", "learned": "learned policy", "behavior": "behavior (BC)"}
-POLICY_COLORS = {"random": "#d62728", "learned": "#1f77b4", "behavior": "#2ca02c"}
+POLICY_LABELS = {
+    "random": "random action",
+    "learned": "learned policy",
+    "dataset": "dataset",
+}
+POLICY_COLORS = {
+    "random": "#4c72b0",
+    "learned": "#55a868",
+    "dataset": "#c44e52",
+}
 
 
 def _read_csvs(paths: list[Path]) -> list[dict[str, str]]:
@@ -120,19 +128,90 @@ def plot_figure2(
     return png, pdf
 
 
-def _correlation(rows: list[dict[str, str]]) -> float:
-    if len(rows) < 2:
-        return float("nan")
-    x = np.asarray([float(row["model_error"]) for row in rows], dtype=np.float64)
-    y = np.asarray([float(row["uncertainty"]) for row in rows], dtype=np.float64)
+def _rankdata(values: np.ndarray) -> np.ndarray:
+    """Return average ranks without adding a SciPy dependency."""
+
+    order = np.argsort(values, kind="mergesort")
+    sorted_values = values[order]
+    ranks = np.empty(values.size, dtype=np.float64)
+    start = 0
+    while start < values.size:
+        stop = start + 1
+        while stop < values.size and sorted_values[stop] == sorted_values[start]:
+            stop += 1
+        ranks[order[start:stop]] = 0.5 * (start + stop - 1)
+        start = stop
+    return ranks
+
+
+def _correlation_values(x: np.ndarray, y: np.ndarray) -> tuple[float, float, int]:
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
     finite = np.isfinite(x) & np.isfinite(y)
-    if finite.sum() < 2 or np.std(x[finite]) == 0 or np.std(y[finite]) == 0:
-        return float("nan")
-    return float(np.corrcoef(x[finite], y[finite])[0, 1])
+    x, y = x[finite], y[finite]
+    if x.size < 2 or np.std(x) == 0 or np.std(y) == 0:
+        return float("nan"), float("nan"), int(x.size)
+    pearson = float(np.corrcoef(x, y)[0, 1])
+    spearman = float(np.corrcoef(_rankdata(x), _rankdata(y))[0, 1])
+    return pearson, spearman, int(x.size)
 
 
-def plot_figure4(root: Path, prefix: str = "") -> tuple[Path, Path]:
-    result_dir = root / "results" / "figure4"
+def _row_values(
+    rows: list[dict[str, str]], x_field: str, y_field: str
+) -> tuple[np.ndarray, np.ndarray]:
+    return (
+        np.asarray([float(row[x_field]) for row in rows], dtype=np.float64),
+        np.asarray([float(row[y_field]) for row in rows], dtype=np.float64),
+    )
+
+
+def _centered_values(
+    rows: list[dict[str, str]],
+    x_field: str,
+    y_field: str,
+    group_fields: tuple[str, ...],
+) -> tuple[np.ndarray, np.ndarray]:
+    x, y = _row_values(rows, x_field, y_field)
+    keys = [tuple(row[field] for field in group_fields) for row in rows]
+    for key in set(keys):
+        mask = np.asarray([candidate == key for candidate in keys], dtype=bool)
+        x[mask] -= np.mean(x[mask])
+        y[mask] -= np.mean(y[mask])
+    return x, y
+
+
+def _statistic_row(
+    task: str,
+    model: str,
+    seed: str | int,
+    scope: str,
+    policy: str,
+    metric_name: str,
+    error_field: str,
+    uncertainty_field: str,
+    x: np.ndarray,
+    y: np.ndarray,
+) -> dict:
+    pearson, spearman, count = _correlation_values(x, y)
+    return {
+        "task": task,
+        "model": model,
+        "seed": seed,
+        "scope": scope,
+        "policy": policy,
+        "metric": metric_name,
+        "error_field": error_field,
+        "uncertainty_field": uncertainty_field,
+        "pearson_r": pearson,
+        "spearman_r": spearman,
+        "n": count,
+    }
+
+
+def plot_figure4(
+    root: Path, prefix: str = "", result_dir: Path | None = None
+) -> tuple[Path, Path]:
+    result_dir = root / "results" / "figure4" if result_dir is None else result_dir
     paths = sorted((result_dir / "points").glob("*.csv"))
     paths = _phase_paths(paths, prefix)
     rows = _read_csvs(paths)
@@ -142,14 +221,131 @@ def plot_figure4(root: Path, prefix: str = "") -> tuple[Path, Path]:
     )
     if not tasks:
         raise RuntimeError(f"no Figure 4 CSV rows found for prefix {prefix!r}")
-    correlations = []
+    metric_pairs = (
+        (
+            "trajectory-rmse_std",
+            "trajectory_error_rmse",
+            "uncertainty_std",
+        ),
+        ("local-rmse_std", "local_error_rmse", "uncertainty_std"),
+        (
+            "trajectory-mse_variance",
+            "trajectory_error_mse",
+            "uncertainty_var",
+        ),
+        ("local-mse_variance", "local_error_mse", "uncertainty_var"),
+        (
+            "trajectory-rmse_total-std",
+            "trajectory_error_rmse",
+            "total_uncertainty_std",
+        ),
+        (
+            "local-rmse_total-std",
+            "local_error_rmse",
+            "total_uncertainty_std",
+        ),
+    )
+    correlations: list[dict] = []
+    policy_summary: list[dict] = []
     for task in tasks:
         for model in ("adm", "ensemble"):
             selected = [row for row in rows if row["task"] == task and row["model"] == model]
-            correlations.append({"task": task, "model": model, "seed": "pooled", "pearson_r": _correlation(selected), "n": len(selected)})
-            for seed in sorted({int(row["seed"]) for row in selected}):
-                seed_rows = [row for row in selected if int(row["seed"]) == seed]
-                correlations.append({"task": task, "model": model, "seed": seed, "pearson_r": _correlation(seed_rows), "n": len(seed_rows)})
+            seed_scopes: list[tuple[str | int, list[dict[str, str]]]] = [
+                ("pooled", selected)
+            ]
+            seed_scopes.extend(
+                (seed, [row for row in selected if int(row["seed"]) == seed])
+                for seed in sorted({int(row["seed"]) for row in selected})
+            )
+            for seed_label, seed_rows in seed_scopes:
+                for metric_name, error_field, uncertainty_field in metric_pairs:
+                    x, y = _row_values(seed_rows, error_field, uncertainty_field)
+                    correlations.append(
+                        _statistic_row(
+                            task,
+                            model,
+                            seed_label,
+                            "pooled",
+                            "all",
+                            metric_name,
+                            error_field,
+                            uncertainty_field,
+                            x,
+                            y,
+                        )
+                    )
+                    for policy in POLICY_LABELS:
+                        policy_rows = [
+                            row for row in seed_rows if row["policy"] == policy
+                        ]
+                        policy_x, policy_y = _row_values(
+                            policy_rows, error_field, uncertainty_field
+                        )
+                        correlations.append(
+                            _statistic_row(
+                                task,
+                                model,
+                                seed_label,
+                                "policy",
+                                policy,
+                                metric_name,
+                                error_field,
+                                uncertainty_field,
+                                policy_x,
+                                policy_y,
+                            )
+                        )
+                for scope, group_fields in (
+                    ("within-policy-centered", ("policy",)),
+                    ("within-step-centered", ("rollout_step",)),
+                    (
+                        "within-policy-step-centered",
+                        ("policy", "rollout_step"),
+                    ),
+                ):
+                    x, y = _centered_values(
+                        seed_rows,
+                        "trajectory_error_rmse",
+                        "uncertainty_std",
+                        group_fields,
+                    )
+                    correlations.append(
+                        _statistic_row(
+                            task,
+                            model,
+                            seed_label,
+                            scope,
+                            "all",
+                            "trajectory-rmse_std",
+                            "trajectory_error_rmse",
+                            "uncertainty_std",
+                            x,
+                            y,
+                        )
+                    )
+            for policy in POLICY_LABELS:
+                policy_rows = [row for row in selected if row["policy"] == policy]
+                for field in (
+                    "trajectory_error_rmse",
+                    "local_error_rmse",
+                    "uncertainty_std",
+                ):
+                    values = np.asarray(
+                        [float(row[field]) for row in policy_rows], dtype=np.float64
+                    )
+                    policy_summary.append(
+                        {
+                            "task": task,
+                            "model": model,
+                            "policy": policy,
+                            "field": field,
+                            "mean": float(np.mean(values)),
+                            "std": float(np.std(values, ddof=1))
+                            if values.size > 1
+                            else 0.0,
+                            "n": int(values.size),
+                        }
+                    )
     panel_count = 2 * len(tasks)
     fig, axes_grid = plt.subplots(
         1, panel_count, figsize=(3.9 * panel_count, 3.7), squeeze=False
@@ -161,18 +357,21 @@ def plot_figure4(root: Path, prefix: str = "") -> tuple[Path, Path]:
             axis = axes[position]
             position += 1
             selected = [row for row in rows if row["task"] == task and row["model"] == model]
-            for policy in ("random", "learned", "behavior"):
+            for policy in POLICY_LABELS:
                 policy_rows = [row for row in selected if row["policy"] == policy]
                 axis.scatter(
-                    [float(row["model_error"]) for row in policy_rows],
-                    [float(row["uncertainty"]) for row in policy_rows],
+                    [float(row["trajectory_error_rmse"]) for row in policy_rows],
+                    [float(row["uncertainty_std"]) for row in policy_rows],
                     s=7,
-                    alpha=0.28,
+                    alpha=0.38,
                     c=POLICY_COLORS[policy],
                     edgecolors="none",
                     label=POLICY_LABELS[policy],
                 )
-            r = _correlation(selected)
+            x, y = _row_values(
+                selected, "trajectory_error_rmse", "uncertainty_std"
+            )
+            r, _, _ = _correlation_values(x, y)
             axis.set_title(f"{MODEL_LABELS[model].split(' ')[0]} (Correlation: {r:.2f})", fontsize=10)
             axis.set_xlabel("Model Error")
             axis.set_ylabel("Model Uncertainty")
@@ -191,8 +390,27 @@ def plot_figure4(root: Path, prefix: str = "") -> tuple[Path, Path]:
     fig.savefig(pdf, bbox_inches="tight")
     plt.close(fig)
     with (result_dir / f"{prefix}correlations.csv").open("w", newline="", encoding="utf-8") as handle:
-        fields = ["task", "model", "seed", "pearson_r", "n"]
+        fields = [
+            "task",
+            "model",
+            "seed",
+            "scope",
+            "policy",
+            "metric",
+            "error_field",
+            "uncertainty_field",
+            "pearson_r",
+            "spearman_r",
+            "n",
+        ]
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(correlations)
+    with (result_dir / f"{prefix}policy_summary.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as handle:
+        fields = ["task", "model", "policy", "field", "mean", "std", "n"]
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(policy_summary)
     return png, pdf

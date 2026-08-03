@@ -1,8 +1,9 @@
 experiment: figure4
+protocol: cumulative-trajectory-rmse-v1
+artifact_namespace: cumulative_rmse_std_hopper_2seeds
 tasks:
   - hopper-medium-replay-v2
-  - walker2d-medium-replay-v2
-seeds: [0, 1, 2, 3, 4]
+seeds: [0, 1]
 device: cuda:0
 model:
   hidden_dim: 200
@@ -32,20 +33,25 @@ policy:
   eval_episodes: 10
   alpha:
     hopper-medium-replay-v2: 0.05
-    walker2d-medium-replay-v2: 0.1
 evaluation:
   starts: 100
   rollout_horizon: 5
   points_per_policy: 500
   inference_chunk: 4096
-  policies: [random, learned, behavior]
+  policies: [random, learned, dataset]
   dataset_diagnostic_points: 500
+  sampling_seed: 202405
+  max_collection_attempts: 20
+parallel:
+  max_workers: 2
 phase_overrides:
   smoke:
+    seeds: [0]
     policy:
       rollout_batch_size: 64
       rollout_chunk_size: 32
       epochs: 1
+      scheduler_epochs: 1
       steps_per_epoch: 10
       checkpoint_interval: 1
       eval_interval: 1
@@ -56,10 +62,4 @@ phase_overrides:
       points_per_policy: 16
       dataset_diagnostic_points: 16
   pilot:
-    tasks: [hopper-medium-replay-v2]
     seeds: [0]
-  deadline48h:
-    tasks: [hopper-medium-replay-v2]
-    seeds: [0, 1]
-    policy:
-      epochs: 1250

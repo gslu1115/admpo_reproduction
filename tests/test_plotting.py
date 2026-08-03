@@ -20,14 +20,30 @@ def test_plotters_create_png_pdf_and_summaries(tmp_path: Path):
     fig4 = tmp_path / "results" / "figure4" / "points"
     fig4.mkdir(parents=True)
     with (fig4 / "sample.csv").open("w", newline="", encoding="utf-8") as handle:
-        fields = ["task", "seed", "model", "policy", "rollout_step", "model_error", "uncertainty", "total_uncertainty"]
+        fields = [
+            "task", "seed", "model", "policy", "rollout_step",
+            "trajectory_error_rmse", "trajectory_error_mse",
+            "local_error_rmse", "local_error_mse", "uncertainty_std",
+            "uncertainty_var", "total_uncertainty_std", "total_uncertainty_var",
+        ]
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for task in ("hopper-medium-replay-v2", "walker2d-medium-replay-v2"):
             for model in ("adm", "ensemble"):
-                for policy in ("random", "learned", "behavior"):
+                for policy in ("random", "learned", "dataset"):
                     for i in range(3):
-                        writer.writerow({"task": task, "seed": 0, "model": model, "policy": policy, "rollout_step": 1, "model_error": i + 0.1, "uncertainty": i + 0.2, "total_uncertainty": i + 0.3})
+                        writer.writerow({
+                            "task": task, "seed": 0, "model": model,
+                            "policy": policy, "rollout_step": 1,
+                            "trajectory_error_rmse": i + 0.1,
+                            "trajectory_error_mse": (i + 0.1) ** 2,
+                            "local_error_rmse": i + 0.2,
+                            "local_error_mse": (i + 0.2) ** 2,
+                            "uncertainty_std": i + 0.3,
+                            "uncertainty_var": (i + 0.3) ** 2,
+                            "total_uncertainty_std": i + 0.4,
+                            "total_uncertainty_var": (i + 0.4) ** 2,
+                        })
     assert all(path.exists() for path in plot_figure4(tmp_path))
     assert (tmp_path / "results" / "figure4" / "correlations.csv").exists()
 
@@ -42,14 +58,4 @@ def test_plotters_create_png_pdf_and_summaries(tmp_path: Path):
     assert all(path.exists() for path in plot_figure2(tmp_path, "deadline48h_"))
     assert (tmp_path / "results" / "figure2" / "deadline48h_summary.csv").exists()
 
-    with (fig4 / "deadline48h_sample.csv").open("w", newline="", encoding="utf-8") as handle:
-        fields = ["task", "seed", "model", "policy", "rollout_step", "model_error", "uncertainty", "total_uncertainty"]
-        writer = csv.DictWriter(handle, fieldnames=fields)
-        writer.writeheader()
-        for seed in (0, 1):
-            for model in ("adm", "ensemble"):
-                for policy in ("random", "learned", "behavior"):
-                    for i in range(3):
-                        writer.writerow({"task": "hopper-medium-replay-v2", "seed": seed, "model": model, "policy": policy, "rollout_step": 1, "model_error": i + 0.1, "uncertainty": i + 0.2, "total_uncertainty": i + 0.3})
-    assert all(path.exists() for path in plot_figure4(tmp_path, "deadline48h_"))
-    assert (tmp_path / "results" / "figure4" / "deadline48h_correlations.csv").exists()
+    assert (tmp_path / "results" / "figure4" / "policy_summary.csv").exists()

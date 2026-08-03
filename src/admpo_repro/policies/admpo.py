@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -152,6 +153,16 @@ def _save(payload: dict, path: Path) -> None:
     temp.replace(path)
 
 
+def _write_progress(path: Path, payload: dict) -> None:
+    """Atomically expose lightweight training progress between checkpoints."""
+
+    temp = path.with_name(path.name + ".tmp")
+    temp.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    temp.replace(path)
+
+
 def _rollout_in_chunks(agent, real_buffer, model_buffer, batch_size: int, chunk: int, horizon: int, history: int) -> None:
     remaining = batch_size
     while remaining:
@@ -207,6 +218,7 @@ def train_admpo(
     )
     records: list[dict] = []
     start_epoch = 0
+    progress_path = output_dir / "progress.json"
     checkpoints = sorted(output_dir.glob("epoch-*.pt"))
     if resume and checkpoints:
         state = torch.load(checkpoints[-1], map_location=device, weights_only=False)
@@ -255,6 +267,23 @@ def train_admpo(
             reward, score = _evaluate(agent, env, int(cfg["eval_episodes"]))
             record.update({"eval_reward": reward, "eval_score": score})
         records.append(record)
+        progress = {
+            "state": "running",
+            "task": dataset.task,
+            "seed": seed,
+            "epoch_completed": epoch + 1,
+            "epochs_total": int(cfg["epochs"]),
+            "updates_completed": num_steps,
+            "updates_total": int(cfg["epochs"]) * int(cfg["steps_per_epoch"]),
+            "latest": record,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_progress(progress_path, progress)
+        if (epoch + 1) % 10 == 0 or "eval_score" in record:
+            print(
+                json.dumps({"event": "admpo_progress", **progress}, ensure_ascii=False),
+                flush=True,
+            )
         if (epoch + 1) % int(cfg["checkpoint_interval"]) == 0 or epoch + 1 == int(cfg["epochs"]):
             path = output_dir / f"epoch-{epoch + 1:06d}.pt"
             _save(
@@ -286,6 +315,20 @@ def train_admpo(
             "seed": seed,
         },
         final,
+    )
+    _write_progress(
+        progress_path,
+        {
+            "state": "completed",
+            "task": dataset.task,
+            "seed": seed,
+            "epoch_completed": int(cfg["epochs"]),
+            "epochs_total": int(cfg["epochs"]),
+            "updates_completed": num_steps,
+            "updates_total": int(cfg["epochs"]) * int(cfg["steps_per_epoch"]),
+            "latest": records[-1] if records else None,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
     )
     return final
 

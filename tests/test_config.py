@@ -1,5 +1,5 @@
 from admpo_repro.config import load_config
-from admpo_repro.runner import _auto_worker_counts, _result_name, _scope
+from admpo_repro.runner import _auto_worker_counts, _figure4_worker_count
 
 
 def test_figure2_formal_scope_is_the_corrected_three_seed_protocol() -> None:
@@ -27,10 +27,11 @@ def test_pilot_is_one_formal_task_and_worker_limit_is_weighted() -> None:
     assert _auto_worker_counts(full, 3) == (3, 3)
 
 
-def test_legacy_figure4_deadline_scope_remains_isolated() -> None:
-    figure4 = load_config("figure4", "deadline48h")
+def test_figure4_uses_the_agreed_local_two_seed_protocol() -> None:
+    figure4 = load_config("figure4", "full")
     assert figure4["tasks"] == ["hopper-medium-replay-v2"]
     assert figure4["seeds"] == [0, 1]
-    assert figure4["policy"]["epochs"] == 1250
-    assert _scope("deadline48h") == "deadline48h"
-    assert _result_name("deadline48h", "task-v2", 1).startswith("deadline48h_")
+    assert figure4["policy"]["epochs"] == 5000
+    assert figure4["evaluation"]["policies"] == ["random", "learned", "dataset"]
+    assert figure4["evaluation"]["rollout_horizon"] == 5
+    assert _figure4_worker_count(figure4, 0, 2) == 2

@@ -34,11 +34,16 @@ def test_uncertainty_formula_matches_manual_variance():
     obs_hist = np.zeros((4, 5, 3), dtype=np.float32)
     act_hist = np.zeros((4, 4, 2), dtype=np.float32)
     action = np.zeros((4, 2), dtype=np.float32)
-    _, uncertainty, total, _ = prediction_statistics(
+    statistics = prediction_statistics(
         "ensemble", model, obs_hist, act_hist, action, "cpu"
     )
     means, stds, _, _ = model.dyna_dist(torch.zeros(4, 3), torch.zeros(4, 2))
-    expected = torch.sqrt(means.var(dim=0).mean(dim=-1)).detach().numpy()
-    expected_total = torch.sqrt((means.var(dim=0) + stds.square().mean(dim=0)).mean(dim=-1)).detach().numpy()
-    np.testing.assert_allclose(uncertainty, expected, rtol=1e-6)
-    np.testing.assert_allclose(total, expected_total, rtol=1e-6)
+    population_variance = means.var(dim=0, correction=0)
+    expected = torch.sqrt(population_variance.mean(dim=-1)).detach().numpy()
+    expected_total = torch.sqrt(
+        (population_variance + stds.square().mean(dim=0)).mean(dim=-1)
+    ).detach().numpy()
+    np.testing.assert_allclose(statistics.uncertainty_std, expected, rtol=1e-6)
+    np.testing.assert_allclose(
+        statistics.total_uncertainty_std, expected_total, rtol=1e-6
+    )
