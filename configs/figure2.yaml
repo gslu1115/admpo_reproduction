@@ -1,7 +1,7 @@
 experiment: figure2
-protocol: heldout-trajectory-actions-stochastic-k-v2
+protocol: heldout-trajectory-actions-stochastic-k-monte-carlo-v3
 artifact_namespace: trajectory_80_10_10_3seeds
-evaluation_namespace: stochastic_uniform_k_gaussian_1000starts_v2
+evaluation_namespace: stochastic_uniform_k_gaussian_20000starts_20repeats_v3
 tasks:
   - hopper-medium-replay-v2
   - walker2d-medium-replay-v2
@@ -39,8 +39,9 @@ bc:
   epochs: 200
   steps_per_epoch: 1000
 evaluation:
-  starts: 1000
+  starts: 20000
   horizon: 100
+  rollout_repeats: 20
   window_seed: 202405
   rollout_seed: 202406
   overflow: 3.4028235e38
@@ -63,6 +64,10 @@ phase_overrides:
     evaluation:
       starts: 8
       horizon: 5
+      rollout_repeats: 2
   pilot:
     tasks: [hopper-medium-replay-v2]
     seeds: [0]
+    evaluation:
+      starts: 1000
+      rollout_repeats: 2

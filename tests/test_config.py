@@ -16,18 +16,22 @@ def test_figure2_formal_scope_is_the_corrected_three_seed_protocol() -> None:
         "seed": 202405,
     }
     assert figure2["evaluation"]["horizon"] == 100
-    assert figure2["evaluation"]["starts"] == 1000
+    assert figure2["evaluation"]["starts"] == 20000
+    assert figure2["evaluation"]["rollout_repeats"] == 20
     assert figure2["evaluation"]["rollout_seed"] == 202406
     assert (
         figure2["evaluation_namespace"]
-        == "stochastic_uniform_k_gaussian_1000starts_v2"
+        == "stochastic_uniform_k_gaussian_20000starts_20repeats_v3"
     )
+    assert figure2["protocol"].endswith("monte-carlo-v3")
 
 
 def test_pilot_is_one_formal_task_and_worker_limit_is_weighted() -> None:
     pilot = load_config("figure2", "pilot")
     assert pilot["tasks"] == ["hopper-medium-replay-v2"]
     assert pilot["seeds"] == [0]
+    assert pilot["evaluation"]["starts"] == 1000
+    assert pilot["evaluation"]["rollout_repeats"] == 2
     full = load_config("figure2", "full")
     assert _auto_worker_counts(full, 3) == (3, 3)
 

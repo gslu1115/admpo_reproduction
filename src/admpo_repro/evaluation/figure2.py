@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import math
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +18,7 @@ class Figure2Windows:
     """Common held-out windows shared by every model and training seed."""
 
     starts: np.ndarray
+    candidate_count: int
     observation_history: np.ndarray
     action_history: np.ndarray
     future_actions: np.ndarray
@@ -39,8 +42,12 @@ def build_test_windows(
         raise RuntimeError(
             f"test split has no window with {required_transitions} consecutive transitions"
         )
+    if pool.size < count:
+        raise RuntimeError(
+            f"test split contains only {pool.size} valid windows, fewer than {count} requested"
+        )
     rng = np.random.default_rng(seed)
-    starts = rng.choice(pool, size=count, replace=pool.size < count).astype(np.int64)
+    starts = rng.choice(pool, size=count, replace=False).astype(np.int64)
     obs_idx = starts[:, None] + np.arange(history, dtype=np.int64)[None, :]
     if history > 1:
         past_action_idx = starts[:, None] + np.arange(history - 1, dtype=np.int64)[None, :]
@@ -54,6 +61,7 @@ def build_test_windows(
     )
     return Figure2Windows(
         starts=starts,
+        candidate_count=int(pool.size),
         observation_history=dataset.observations[obs_idx].astype(np.float32, copy=True),
         action_history=action_history.astype(np.float32, copy=True),
         future_actions=dataset.actions[future_idx].astype(np.float32, copy=True),
@@ -73,6 +81,7 @@ def _sample_prediction_step(
     backtrack_rng: np.random.Generator,
     noise_rng: np.random.Generator,
     elite_rng: np.random.Generator,
+    backtrack_k: int | None = None,
 ) -> tuple[np.ndarray, int]:
     """Sample one stochastic model step using the official rollout semantics.
 
@@ -89,7 +98,13 @@ def _sample_prediction_step(
         available = min(
             int(max_backtrack), observation_history.shape[1], all_actions.shape[1]
         )
-        k = int(backtrack_rng.integers(1, available + 1))
+        k = (
+            int(backtrack_rng.integers(1, available + 1))
+            if backtrack_k is None
+            else int(backtrack_k)
+        )
+        if not 1 <= k <= available:
+            raise ValueError(f"backtrack_k={k} is outside [1,{available}]")
         if kind == "adm":
             mean, std, _, _ = model.dyna_dist(
                 obs_t[:, -k], actions_t[:, -k:]
@@ -127,6 +142,7 @@ def evaluate_model_rollout(
     seed: int,
     config: dict,
     windows: Figure2Windows | None = None,
+    repeat: int = 0,
 ) -> list[dict[str, float | int | str]]:
     """Evaluate autoregressive prediction against held-out recorded trajectories.
 
@@ -143,7 +159,9 @@ def evaluate_model_rollout(
     overflow = float(evaluation["overflow"])
     device = config["device"]
     rollout_seed = int(evaluation["rollout_seed"])
-    common_seed = rollout_seed + seed * 1_000_003
+    if repeat < 0:
+        raise ValueError("repeat must be non-negative")
+    common_seed = rollout_seed + seed * 1_000_003 + repeat * 10_000_019
     backtrack_rng = np.random.default_rng(common_seed + 11)
     noise_rng = np.random.default_rng(
         common_seed + {"adm": 101, "rnn": 211, "ensemble": 307}[kind]
@@ -158,23 +176,40 @@ def evaluate_model_rollout(
             count,
             int(evaluation["window_seed"]),
         )
+    count = int(windows.starts.size)
+    chunk_size = max(1, int(evaluation.get("inference_chunk", count)))
     observation_history = windows.observation_history.copy()
     action_history = windows.action_history.copy()
     rows: list[dict[str, float | int | str]] = []
     for step in range(horizon):
         action = windows.future_actions[:, step]
-        predicted, backtrack_k = _sample_prediction_step(
-            kind,
-            model,
-            observation_history,
-            action_history,
-            action,
-            device,
-            history,
-            backtrack_rng,
-            noise_rng,
-            elite_rng,
+        available = min(history, observation_history.shape[1], action_history.shape[1] + 1)
+        backtrack_k = (
+            int(backtrack_rng.integers(1, available + 1))
+            if kind in ("adm", "rnn")
+            else 1
         )
+        predicted = np.empty(
+            (count, windows.true_next_observations.shape[-1]), dtype=np.float32
+        )
+        for chunk_start in range(0, count, chunk_size):
+            chunk_stop = min(chunk_start + chunk_size, count)
+            chunk_prediction, used_k = _sample_prediction_step(
+                kind,
+                model,
+                observation_history[chunk_start:chunk_stop],
+                action_history[chunk_start:chunk_stop],
+                action[chunk_start:chunk_stop],
+                device,
+                history,
+                backtrack_rng,
+                noise_rng,
+                elite_rng,
+                backtrack_k=backtrack_k,
+            )
+            if used_k != backtrack_k:
+                raise RuntimeError("chunked rollout changed the shared backtrack length")
+            predicted[chunk_start:chunk_stop] = chunk_prediction
         target = windows.true_next_observations[:, step]
         difference = predicted.astype(np.float64) - target.astype(np.float64)
         squared = np.mean(np.square(difference), axis=-1, dtype=np.float64)
@@ -185,12 +220,17 @@ def evaluate_model_rollout(
                 "task": task,
                 "seed": seed,
                 "model": kind,
+                "repeat": repeat,
                 "rollout_length": step + 1,
                 "backtrack_k": backtrack_k,
                 "error_mean": float(np.mean(squared, dtype=np.float64)),
                 "error_std": float(np.std(squared, dtype=np.float64)),
                 "error_sem": float(np.std(squared, dtype=np.float64) / np.sqrt(squared.size)),
                 "n_windows": int(squared.size),
+                "n_samples": int(squared.size),
+                "rollout_repeats": int(evaluation.get("rollout_repeats", 1)),
+                "repeat_mean_std": "",
+                "repeat_mean_sem": "",
             }
         )
         observation_history = np.concatenate(
@@ -203,20 +243,141 @@ def evaluate_model_rollout(
     return rows
 
 
+def _sorted_figure2_rows(rows: list[dict]) -> list[dict]:
+    model_order = {"adm": 0, "ensemble": 1, "rnn": 2}
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row["task"]),
+            int(row["seed"]),
+            model_order[str(row["model"])],
+            int(row["repeat"]),
+            int(row["rollout_length"]),
+        ),
+    )
+
+
+def load_completed_repeat_rows(
+    path: Path,
+    horizon: int,
+    n_windows: int,
+    rollout_repeats: int,
+) -> list[dict[str, str]]:
+    """Load only complete repeat groups from an interrupted evaluation CSV."""
+
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    grouped: dict[tuple[str, int], list[dict[str, str]]] = defaultdict(list)
+    for row in rows:
+        try:
+            model = row["model"]
+            repeat = int(row["repeat"])
+            row_windows = int(row["n_windows"])
+            row_repeats = int(row["rollout_repeats"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (
+            model not in {"adm", "ensemble", "rnn"}
+            or not 0 <= repeat < rollout_repeats
+            or row_windows != n_windows
+            or row_repeats != rollout_repeats
+        ):
+            continue
+        grouped[(model, repeat)].append(row)
+    complete: list[dict[str, str]] = []
+    expected_steps = list(range(1, horizon + 1))
+    for group in grouped.values():
+        try:
+            ordered = sorted(group, key=lambda row: int(row["rollout_length"]))
+            steps = [int(row["rollout_length"]) for row in ordered]
+        except (KeyError, TypeError, ValueError):
+            continue
+        if steps == expected_steps:
+            complete.extend(ordered)
+    return _sorted_figure2_rows(complete)
+
+
+def aggregate_repeat_rows(
+    rows: list[dict], rollout_repeats: int
+) -> list[dict[str, float | int | str]]:
+    """Pool window errors within a seed without treating repeats as seeds."""
+
+    grouped: dict[tuple[str, int, str, int], list[dict]] = defaultdict(list)
+    for row in rows:
+        grouped[
+            (
+                str(row["task"]),
+                int(row["seed"]),
+                str(row["model"]),
+                int(row["rollout_length"]),
+            )
+        ].append(row)
+    aggregated: list[dict[str, float | int | str]] = []
+    for (task, seed, model, step), group in grouped.items():
+        repeat_ids = {int(row["repeat"]) for row in group}
+        if len(group) != rollout_repeats or repeat_ids != set(range(rollout_repeats)):
+            raise RuntimeError(
+                f"incomplete repeats for {task}/{seed}/{model}/step-{step}: "
+                f"{sorted(repeat_ids)}"
+            )
+        counts = np.asarray([int(row["n_windows"]) for row in group], dtype=np.int64)
+        if not np.all(counts == counts[0]):
+            raise RuntimeError(
+                f"inconsistent window counts for {task}/{seed}/{model}/step-{step}"
+            )
+        means = np.asarray([float(row["error_mean"]) for row in group], dtype=np.float64)
+        stds = np.asarray([float(row["error_std"]) for row in group], dtype=np.float64)
+        total = int(np.sum(counts))
+        pooled_mean = float(np.sum(means * counts) / total)
+        second_moment = float(
+            np.sum((np.square(stds) + np.square(means)) * counts) / total
+        )
+        pooled_std = math.sqrt(max(0.0, second_moment - pooled_mean * pooled_mean))
+        repeat_std = float(np.std(means, ddof=1)) if rollout_repeats > 1 else 0.0
+        aggregated.append(
+            {
+                "task": task,
+                "seed": seed,
+                "model": model,
+                "repeat": -1,
+                "rollout_length": step,
+                "backtrack_k": "",
+                "error_mean": pooled_mean,
+                "error_std": pooled_std,
+                "error_sem": pooled_std / math.sqrt(total),
+                "n_windows": int(counts[0]),
+                "n_samples": total,
+                "rollout_repeats": rollout_repeats,
+                "repeat_mean_std": repeat_std,
+                "repeat_mean_sem": repeat_std / math.sqrt(rollout_repeats),
+            }
+        )
+    return _sorted_figure2_rows(aggregated)
+
+
 def write_figure2_rows(rows: list[dict], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     fields = [
         "task",
         "seed",
         "model",
+        "repeat",
         "rollout_length",
         "backtrack_k",
         "error_mean",
         "error_std",
         "error_sem",
         "n_windows",
+        "n_samples",
+        "rollout_repeats",
+        "repeat_mean_std",
+        "repeat_mean_sem",
     ]
-    with output.open("w", newline="", encoding="utf-8") as handle:
+    temporary = output.with_name(output.name + ".tmp")
+    with temporary.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(_sorted_figure2_rows(rows))
+    temporary.replace(output)

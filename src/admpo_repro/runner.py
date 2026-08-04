@@ -19,8 +19,10 @@ from admpo_repro.dynamics.training import (
     train_sequence_model,
 )
 from admpo_repro.evaluation.figure2 import (
+    aggregate_repeat_rows,
     build_test_windows,
     evaluate_model_rollout,
+    load_completed_repeat_rows,
     write_figure2_rows,
 )
 from admpo_repro.evaluation.figure4 import (
@@ -227,13 +229,18 @@ def run_figure2(config: dict, resume: bool, workers: int = 0) -> None:
     )
     manifest["rollout_semantics"] = {
         "adm_rnn_backtrack": (
-            "one scalar k sampled uniformly from [1,m] per batched rollout step"
+            "one scalar k sampled uniformly from [1,m] per repeat and batched "
+            "rollout step; ADM and RNN share the same k stream"
         ),
         "ensemble_member": (
             "one elite sampled independently per trajectory and rollout step"
         ),
         "state_prediction": "Gaussian sample mean + standard_normal * std",
         "rollout_seed": int(config["evaluation"]["rollout_seed"]),
+        "fixed_window_count": int(config["evaluation"]["starts"]),
+        "rollout_repeats": int(config["evaluation"]["rollout_repeats"]),
+        "inference_chunk": int(config["evaluation"]["inference_chunk"]),
+        "plot_statistical_unit": "training seed; repeats are pooled within seed",
     }
     sequence_workers, ensemble_workers = _auto_worker_counts(config, workers)
     manifest["parallel"] = {
@@ -280,24 +287,79 @@ def run_figure2(config: dict, resume: bool, workers: int = 0) -> None:
         manifest["splits"][task] = split.to_dict()
         manifest["evaluation_windows"][task] = {
             "count": int(windows.starts.size),
+            "candidate_count": int(windows.candidate_count),
+            "sampled_without_replacement": True,
             "horizon": int(config["evaluation"]["horizon"]),
+            "rollout_repeats": int(config["evaluation"]["rollout_repeats"]),
             "start_indices": windows.starts.tolist(),
             "start_indices_sha256": hashlib.sha256(windows.starts.tobytes()).hexdigest(),
         }
         for seed in config["seeds"]:
             evaluation_clock = time.perf_counter()
-            rows = []
+            rollout_repeats = int(config["evaluation"]["rollout_repeats"])
+            repeat_output = (
+                result_dir / "per_repeat" / f"{task}_seed-{seed}.csv"
+            )
+            repeat_rows = (
+                load_completed_repeat_rows(
+                    repeat_output,
+                    int(config["evaluation"]["horizon"]),
+                    int(windows.starts.size),
+                    rollout_repeats,
+                )
+                if resume
+                else []
+            )
+            completed = {
+                (str(row["model"]), int(row["repeat"])) for row in repeat_rows
+            }
+            resumed_repeats = len(completed)
             paths = _figure2_paths(root, config, task, seed)
             for kind in FIGURE2_KINDS:
+                missing_repeats = [
+                    repeat
+                    for repeat in range(rollout_repeats)
+                    if (kind, repeat) not in completed
+                ]
+                if not missing_repeats:
+                    continue
                 model = load_dynamics_checkpoint(kind, dataset, config, paths[kind])
-                rows.extend(
-                    evaluate_model_rollout(
-                        task, kind, model, dataset, split, seed, config, windows
+                for repeat in missing_repeats:
+                    repeat_clock = time.perf_counter()
+                    new_rows = evaluate_model_rollout(
+                        task,
+                        kind,
+                        model,
+                        dataset,
+                        split,
+                        seed,
+                        config,
+                        windows,
+                        repeat=repeat,
                     )
-                )
+                    repeat_rows.extend(new_rows)
+                    write_figure2_rows(repeat_rows, repeat_output)
+                    completed.add((kind, repeat))
+                    print(
+                        json.dumps(
+                            {
+                                "event": "figure2_evaluation_repeat_finished",
+                                "task": task,
+                                "seed": seed,
+                                "model": kind,
+                                "repeat_completed": repeat + 1,
+                                "repeats_total": rollout_repeats,
+                                "windows": int(windows.starts.size),
+                                "duration_seconds": time.perf_counter() - repeat_clock,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        flush=True,
+                    )
                 del model
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
+            rows = aggregate_repeat_rows(repeat_rows, rollout_repeats)
             output = result_dir / "per_seed" / f"{task}_seed-{seed}.csv"
             write_figure2_rows(rows, output)
             manifest["evaluations"].append(
@@ -305,6 +367,11 @@ def run_figure2(config: dict, resume: bool, workers: int = 0) -> None:
                     "task": task,
                     "seed": seed,
                     "output": str(output),
+                    "repeat_output": str(repeat_output),
+                    "rollout_repeats": rollout_repeats,
+                    "windows_per_repeat": int(windows.starts.size),
+                    "stochastic_rollouts": int(windows.starts.size) * rollout_repeats,
+                    "resumed_model_repeats": resumed_repeats,
                     "duration_seconds": time.perf_counter() - evaluation_clock,
                 }
             )

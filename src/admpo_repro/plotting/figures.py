@@ -66,8 +66,19 @@ def plot_figure2(
     if not tasks:
         raise RuntimeError(f"no Figure 2 CSV rows found for prefix {prefix!r}")
     grouped: dict[tuple[str, str, int], list[float]] = defaultdict(list)
+    repeat_counts: dict[tuple[str, str, int], set[int]] = defaultdict(set)
+    seed_values: dict[tuple[str, str, int, int], float] = {}
     for row in rows:
-        grouped[(row["task"], row["model"], int(row["rollout_length"]))].append(float(row["error_mean"]))
+        group_key = (row["task"], row["model"], int(row["rollout_length"]))
+        seed_key = (*group_key, int(row["seed"]))
+        if seed_key in seed_values:
+            raise RuntimeError(
+                "Figure 2 per_seed CSV contains duplicate rows for "
+                f"{seed_key}; rollout repeats must be pooled before plotting"
+            )
+        seed_values[seed_key] = float(row["error_mean"])
+        grouped[group_key].append(seed_values[seed_key])
+        repeat_counts[group_key].add(int(row.get("rollout_repeats") or 1))
     summary_rows = []
     fig, axes_grid = plt.subplots(
         1, len(tasks), figsize=(3.9 * len(tasks), 3.6), sharey=False, squeeze=False
@@ -83,6 +94,11 @@ def plot_figure2(
             means, stds, sems = [], [], []
             for step in steps:
                 values = np.asarray(grouped[(task, model, step)], dtype=np.float64)
+                configured_repeats = repeat_counts[(task, model, step)]
+                if len(configured_repeats) != 1:
+                    raise RuntimeError(
+                        f"inconsistent rollout repeat counts for {task}/{model}/step-{step}"
+                    )
                 mean = float(np.mean(values))
                 std = float(np.std(values, ddof=1)) if values.size > 1 else 0.0
                 sem = float(np.std(values, ddof=1) / math.sqrt(values.size)) if values.size > 1 else 0.0
@@ -90,7 +106,16 @@ def plot_figure2(
                 stds.append(std)
                 sems.append(sem)
                 summary_rows.append(
-                    {"task": task, "model": model, "rollout_length": step, "mean": mean, "std": std, "sem": sem, "n_seeds": values.size}
+                    {
+                        "task": task,
+                        "model": model,
+                        "rollout_length": step,
+                        "mean": mean,
+                        "std": std,
+                        "sem": sem,
+                        "n_seeds": values.size,
+                        "rollout_repeats": next(iter(configured_repeats)),
+                    }
                 )
             means_np = np.asarray(means)
             sem_np = np.asarray(sems)
@@ -121,7 +146,16 @@ def plot_figure2(
     fig.savefig(pdf, bbox_inches="tight")
     plt.close(fig)
     with (result_dir / f"{prefix}summary.csv").open("w", newline="", encoding="utf-8") as handle:
-        fields = ["task", "model", "rollout_length", "mean", "std", "sem", "n_seeds"]
+        fields = [
+            "task",
+            "model",
+            "rollout_length",
+            "mean",
+            "std",
+            "sem",
+            "n_seeds",
+            "rollout_repeats",
+        ]
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(summary_rows)
