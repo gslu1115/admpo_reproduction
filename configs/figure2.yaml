@@ -1,6 +1,7 @@
 experiment: figure2
-protocol: heldout-trajectory-actions-v1
+protocol: heldout-trajectory-actions-stochastic-k-v2
 artifact_namespace: trajectory_80_10_10_3seeds
+evaluation_namespace: stochastic_uniform_k_gaussian_v2
 tasks:
   - hopper-medium-replay-v2
   - walker2d-medium-replay-v2
@@ -41,6 +42,7 @@ evaluation:
   starts: 100
   horizon: 100
   window_seed: 202405
+  rollout_seed: 202406
   overflow: 3.4028235e38
   inference_chunk: 4096
 parallel:

@@ -17,6 +17,8 @@ def test_figure2_formal_scope_is_the_corrected_three_seed_protocol() -> None:
     }
     assert figure2["evaluation"]["horizon"] == 100
     assert figure2["evaluation"]["starts"] == 100
+    assert figure2["evaluation"]["rollout_seed"] == 202406
+    assert figure2["evaluation_namespace"] == "stochastic_uniform_k_gaussian_v2"
 
 
 def test_pilot_is_one_formal_task_and_worker_limit_is_weighted() -> None:

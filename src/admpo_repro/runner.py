@@ -74,7 +74,11 @@ def _figure2_model_dir(root: Path, config: dict, task: str, seed: int) -> Path:
 
 
 def _figure2_result_dir(root: Path, config: dict) -> Path:
-    return root / "results" / "figure2" / config["artifact_namespace"] / config["phase"]
+    path = root / "results" / "figure2" / config["artifact_namespace"]
+    evaluation_namespace = config.get("evaluation_namespace")
+    if evaluation_namespace:
+        path /= evaluation_namespace
+    return path / config["phase"]
 
 
 def _figure2_split(dataset, config: dict):
@@ -209,6 +213,7 @@ def run_figure2(config: dict, resume: bool, workers: int = 0) -> None:
             "experiment": "figure2",
             "protocol": config["protocol"],
             "artifact_namespace": config["artifact_namespace"],
+            "evaluation_namespace": config.get("evaluation_namespace"),
             "phase": config["phase"],
             "seeds": config["seeds"],
             "tasks": config["tasks"],
@@ -220,6 +225,16 @@ def run_figure2(config: dict, resume: bool, workers: int = 0) -> None:
             "evaluations": [],
         }
     )
+    manifest["rollout_semantics"] = {
+        "adm_rnn_backtrack": (
+            "one scalar k sampled uniformly from [1,m] per batched rollout step"
+        ),
+        "ensemble_member": (
+            "one elite sampled independently per trajectory and rollout step"
+        ),
+        "state_prediction": "Gaussian sample mean + standard_normal * std",
+        "rollout_seed": int(config["evaluation"]["rollout_seed"]),
+    }
     sequence_workers, ensemble_workers = _auto_worker_counts(config, workers)
     manifest["parallel"] = {
         "requested_workers": workers,
@@ -294,11 +309,14 @@ def run_figure2(config: dict, resume: bool, workers: int = 0) -> None:
                 }
             )
     manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
+    manifest_name = f"figure2-{config['artifact_namespace']}"
+    if config.get("evaluation_namespace"):
+        manifest_name += f"-{config['evaluation_namespace']}"
     manifest_path = (
         root
         / "results"
         / "manifests"
-        / f"figure2-{config['artifact_namespace']}-{config['phase']}.json"
+        / f"{manifest_name}-{config['phase']}.json"
     )
     write_manifest(manifest_path, manifest)
     plot_figure2(root, result_dir=result_dir)
