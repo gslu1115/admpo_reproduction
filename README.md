@@ -7,10 +7,10 @@
 | 实验 | 当前口径 | 状态 | 说明 |
 |---|---|---|---|
 | Figure 2 诊断版 | 2任务、3种子、1000固定窗口、每窗口1次随机 rollout | 已完成 | 用于验证随机 `k` 与高斯采样修正，结果保留但不作为最终高统计量版本 |
-| Figure 2 最终版 | 2任务、3种子、20000固定窗口、每窗口20次随机 rollout | 代码与测试已完成，尚未运行 | 独立 v3 命名空间；不会覆盖诊断版 |
+| Figure 2 最终版 | 2任务、3种子、20000固定窗口、每窗口20次随机 rollout | **已完成** | 独立 v3 命名空间；结果已下载并完成本地一致性校验 |
 | Figure 4 | Hopper、2种子、3000 epochs | 本地正式训练中 | 从两个种子的1250-epoch检查点恢复；旧预算目录只归档 |
 
-本文档只报告已经实际产生的结果。Figure 2 v3 和 Figure 4 完成前，对应表格明确标记为“待运行”，不会预填或推测实验结果。
+本文档只报告已经实际产生的结果。Figure 2 v3 已于 2026-08-04 完成；Figure 4 完成前仍明确标记为“运行中”，不会预填或推测结果。
 
 ## 复现范围
 
@@ -150,7 +150,7 @@ python -m admpo_repro run figure2 --phase pilot --seeds 0 --workers 1 --resume
 正式 v3 评估（20000窗口、20 repeats、3种子；已有检查点全部复用）：
 
 ```bash
-python -m admpo_repro run figure2 --phase full --seeds 0 1 2 --workers 3 --resume
+python -m admpo_repro run figure2 --phase full --seeds 0 1 2 --workers 1 --resume
 ```
 
 从 `per_seed` CSV 重绘：
@@ -185,14 +185,27 @@ Hopper 的 ADM/RNN 曲线多次交叉，且 seed 2 的 step-100 ADM 略差于 RN
 
 ### Figure 2 v3 最终版（20000窗口 × 20 repeats）
 
-状态：**尚未运行**。预期输出：
+状态：**已完成并通过本地独立校验**。评估在 RTX 5090 上复用18个既有动力学检查点，没有重新训练；从启动、检查点复用、360个 model-repeat、汇总到绘图共耗时约10分09秒（2026-08-04 22:43:16—22:53:25，UTC+8）。Hopper 与 Walker2d 分别有24678和20231个合法候选窗口，均按固定种子无放回抽取20000个。
+
+![Figure 2 v3 最终版](results/figure2/trajectory_80_10_10_3seeds/stochastic_uniform_k_gaussian_20000starts_20repeats_v3/full/figure2.png)
+
+step 100 的三训练种子均值 ± 跨种子 SEM：
+
+| 任务 | ADM | RNN | Ensemble | 与论文趋势的对照 |
+|---|---:|---:|---:|---|
+| Hopper-medium-replay-v2 | 0.3277 ± 0.0231 | **0.3167 ± 0.0265** | 0.6937 ± 0.0044 | ADM显著优于Ensemble，但比RNN高约3.5%，未满足“ADM最低”的严格验收条件 |
+| Walker2d-medium-replay-v2 | **8.2143 ± 0.1729** | 10.7404 ± 0.6591 | 21387.8544 ± 17443.9624 | ADM最低，复现长期预测优势；Ensemble出现严重重尾发散 |
+
+因此，本项目将 Figure 2 判定为**部分复现**：Walker2d 完整支持论文主要趋势；Hopper 支持 ADM 相对 Ensemble 的优势，但 ADM 与 RNN 非常接近且排序与严格预期相反。项目不筛选种子、不删轨迹，也不通过调整坐标轴掩盖该结果。与1000窗口诊断版相比，Hopper 的 ADM、RNN、Ensemble step-100 均值分别从0.3643、0.3829、0.7479变为0.3277、0.3167、0.6937，说明增大 Monte Carlo 样本后 ADM/RNN 的细微排序发生了变化；Walker2d 的结论保持稳定。
+
+输出：
 
 ```text
 results/figure2/trajectory_80_10_10_3seeds/
 └── stochastic_uniform_k_gaussian_20000starts_20repeats_v3/full/
-    ├── per_repeat/     # 每个任务—seed的20次随机曲线
+    ├── per_repeat/     # 每个任务—seed的20次随机曲线，6个CSV各6000行
     ├── per_seed/       # repeat池化后的每seed曲线，主图只读取这里
-    ├── summary.csv     # 3个训练seed的均值、标准差和SEM
+    ├── summary.csv     # 3个训练seed的均值、标准差和SEM，共600行
     ├── figure2.png
     └── figure2.pdf
 ```
@@ -203,7 +216,7 @@ results/figure2/trajectory_80_10_10_3seeds/
 results/manifests/figure2-trajectory_80_10_10_3seeds-stochastic_uniform_k_gaussian_20000starts_20repeats_v3-full.json
 ```
 
-正式结果完成后，本节将补充实测耗时、step-100表格、repeat稳定性和与诊断版/论文趋势的对照。
+结果包 SHA256 为 `887592ac2ac4a01705c70c58573ed538dcddaefa1e0bdc3a1bf201de44fda80d`；PNG、summary CSV 和 manifest 的 SHA256 分别为 `faf1a573a88cd57e1ce085e541b63b1202b3311d993c7ecf6ac3c4fe00e7ea48`、`645aebd31c4cb7979dd922c721657587909fa6bd228d169829c63dda169274b7`、`2d2aad14b23b6d4ba82491e2c5203ddb977db2e91d8ad279720871fcc8b074e3`。本地校验确认每个 repeat CSV 恰有 `3模型 × 20 repeats × 100步 = 6000` 行，6个 seed CSV 各300行，无重复键、缺失 repeat、NaN 或 Inf。
 
 ### Figure 4
 
@@ -248,7 +261,7 @@ admpo-reproduction/
 ## 可复现性与已知限制
 
 - Python、NumPy、PyTorch CPU/CUDA、数据划分、窗口抽样、`k`、高斯噪声和 elite 选择均由记录的种子控制。
-- Figure 2 v3 的计算量约为诊断版的400倍；正式运行前先执行 pilot，并根据实测吞吐更新预计时间。
+- Figure 2 v3 的名义模型—窗口—步计算量约为诊断版的400倍，但 RTX 5090 上的分块批量推理实测全流程仅约10分09秒；该时间不包含模型训练。
 - 20000窗口可能相互重叠，因此窗口级 SEM 不能解释为20000条独立 episode 的统计显著性；主图只使用跨训练 seed SEM。
 - 3个训练 seed 少于原始五种子计划，跨 seed 不确定性估计仍较弱。
 - 论文与官方仓库没有公开完整 Figure 2 基线训练/评估脚本；RNN、Ensemble及部分训练细节参考同作者 ADM-v2 与 OfflineRL-Kit 重建。
