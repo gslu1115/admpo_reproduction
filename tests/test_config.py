@@ -31,7 +31,9 @@ def test_figure4_uses_the_agreed_local_two_seed_protocol() -> None:
     figure4 = load_config("figure4", "full")
     assert figure4["tasks"] == ["hopper-medium-replay-v2"]
     assert figure4["seeds"] == [0, 1]
-    assert figure4["policy"]["epochs"] == 5000
+    assert figure4["policy"]["epochs"] == 3000
+    assert figure4["policy"]["scheduler_epochs"] == 5000
+    assert figure4["artifact_namespace"].endswith("_3000epochs")
     assert figure4["evaluation"]["policies"] == ["random", "learned", "dataset"]
     assert figure4["evaluation"]["rollout_horizon"] == 5
     assert _figure4_worker_count(figure4, 0, 2) == 2
