@@ -13,5 +13,10 @@ runs/
 *.hdf5
 *.h5
 *.log
+*.npz
+*.tmp
+.DS_Store
+Thumbs.db
 results/**/smoke_*
 results/manifests/*-smoke.json
+results/figure4/smoke/
