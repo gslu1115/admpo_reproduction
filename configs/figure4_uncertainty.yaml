@@ -1,0 +1,83 @@
+experiment: figure4_uncertainty
+task: hopper-medium-replay-v2
+device: cuda:0
+model_seeds: [0, 1, 2]
+
+dataset_split:
+  train: 0.8
+  validation: 0.1
+  test: 0.1
+  seed: 202405
+
+protocol:
+  dynamics_types: [adm, ensemble]
+  policies: [random, bc, learned_sac]
+  horizons: [5]
+  max_backtrack: 5
+  endpoint_semantics: after_h_model_transitions_then_one_step_probe
+  rollout_state: selected_predictor_gaussian_sample
+  error: five_predictor_mixture_expected_squared_error_raw_state_sum
+  adm_source_sampling: vendor_batch_shared
+  uncertainty: paper_eq4_total_variance_l1
+  termination_source: vendor_hopper_static_fn_on_sampled_model_state
+  oracle_done_role: diagnostic_only
+  time_limit_truncation: ignored
+  initial_window_partition: figure2_test
+  replacement_or_top_up: false
+
+evaluation:
+  initial_windows: 5000
+  inference_chunk: 4096
+  oracle_chunk: 512
+  require_all_checkpoint_seeds: true
+
+policies:
+  random:
+    distribution: independent_action_dimension_uniform
+  bc:
+    stochastic: false
+    observation_normalization: none
+  learned_sac:
+    hidden_dims: [256, 256]
+    stochastic: false
+    sampling: actor_mean_then_tanh
+
+checkpoints:
+  adm:
+    "0": vendor/ADMPO/result/d4rl/hopper-medium-replay-v2/admpo/26-0805-232306/model/dyna_seed-0.pth
+    "1": vendor/ADMPO/result/d4rl/hopper-medium-replay-v2/admpo/26-0806-210810/model/dyna_seed-1.pth
+    "2": vendor/ADMPO/result/d4rl/hopper-medium-replay-v2/admpo/26-0807-195952/model/dyna_seed-2.pth
+  learned_sac:
+    "0": vendor/ADMPO/result/d4rl/hopper-medium-replay-v2/admpo/26-0805-232306/model/agent_seed-0.pth
+    "1": vendor/ADMPO/result/d4rl/hopper-medium-replay-v2/admpo/26-0806-210810/model/agent_seed-1.pth
+    "2": vendor/ADMPO/result/d4rl/hopper-medium-replay-v2/admpo/26-0807-195952/model/agent_seed-2.pth
+  ensemble:
+    "0": runs/figure2/trajectory_80_10_10_3seeds/formal/hopper-medium-replay-v2/seed-0/models/ensemble.pt
+    "1": runs/figure2/trajectory_80_10_10_3seeds/formal/hopper-medium-replay-v2/seed-1/models/ensemble.pt
+    "2": runs/figure2/trajectory_80_10_10_3seeds/formal/hopper-medium-replay-v2/seed-2/models/ensemble.pt
+  bc: runs/figure4_uncertainty/bc/hopper-medium-replay-v2/seed-202407/full/bc.pt
+
+random_seeds:
+  initial_windows: 20240801
+  random_policy: 20240802
+  adm_backtrack: 20240804
+  adm_gaussian: 20240805
+  ensemble_member: 20240806
+  ensemble_gaussian: 20240807
+
+oracle_audit:
+  samples: 1000
+  median_rmse_tolerance: 1.0e-4
+  p99_rmse_tolerance: 1.0e-4
+
+plot:
+  width_mm: 178
+  height_mm: 76
+  dpi: 300
+  background: white
+  x_limits: [0.0, 1.5]
+  y_limits: [0.0, 1.0]
+  formats: [pdf]
+
+output:
+  namespace: results/figure4
