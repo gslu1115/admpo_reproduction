@@ -1,271 +1,125 @@
-# ADMPO Figure 2 与 Figure 4 部分复现
+# ADMPO 复现报告：动力学预测与不确定性量化
 
-本项目复现论文 *Any-step Dynamics Model Improves Future Predictions for Online and Offline Reinforcement Learning* 的 Figure 2（长期动力学预测误差）与 Figure 4（模型误差—不确定性相关性）。目标是复现论文的主要趋势与结论，不追求数值或图像像素级一致。
+> 这是一个强化学习论文复现练习。目标不是把论文的全部结论直接视为已经复现，而是建立一条可运行、可检查、可追溯的实验链路，并记录已经实现的部分、尚未实现的部分，以及下一步值得深入的问题。
 
-## 当前状态
+本文复现 [Any-step Dynamics Model Improves Future Predictions for Online and Offline Reinforcement Learning](https://arxiv.org/abs/2405.17031)（ADMPO）的两个核心现象：
 
-| 实验 | 当前口径 | 状态 | 说明 |
-|---|---|---|---|
-| Figure 2 诊断版 | 2任务、3种子、1000固定窗口、每窗口1次随机 rollout | 已完成 | 用于验证随机 `k` 与高斯采样修正，结果保留但不作为最终高统计量版本 |
-| Figure 2 最终版 | 2任务、3种子、20000固定窗口、每窗口20次随机 rollout | **已完成** | 独立 v3 命名空间；结果已下载并完成本地一致性校验 |
-| Figure 4 | Hopper、2种子、3000 epochs | 本地正式训练中 | 从两个种子的1250-epoch检查点恢复；旧预算目录只归档 |
-
-本文档只报告已经实际产生的结果。Figure 2 v3 已于 2026-08-04 完成；Figure 4 完成前仍明确标记为“运行中”，不会预填或推测结果。
+- **Figure 2 类型实验**：ADM、Bootstrapping RNN 与 Ensemble 在长时模型 rollout 中的预测误差增长；
+- **Figure 4 类型实验**：在 Hopper 上比较 ADM 与 Ensemble 的模型不确定性和模型误差之间的关系。
 
 ## 复现范围
 
-### Figure 2
+本项目并非对论文全部实验的完整复现。当前范围如下。
 
-- 数据集：`hopper-medium-replay-v2`、`walker2d-medium-replay-v2`。
-- 模型：ADM、Bootstrapping RNN、7成员/5 elite Ensemble。
-- 训练种子：`0, 1, 2`。
-- 数据按完整 episode 划分为训练/验证/测试集，目标比例为 `80%/10%/10%`，划分种子为 `202405`。
-- 三类模型共享数据划分；所有训练种子、模型和随机重复共享同一组测试窗口。
-- 测试动作直接使用对应 D4RL 轨迹中记录的真实动作，不训练 BC，不调用 MuJoCo oracle。
-- 最终曲线以3个训练种子为统计单位，阴影为跨种子 SEM；20次随机 repeat 在每个种子内部汇总，绝不当成额外种子。
+| 模块 | 已完成范围 | 不在当前范围内 |
+| --- | --- | --- |
+| 离线策略跑分 | `hopper-medium-replay-v2`、`walker2d-medium-replay-v2`；ADMPO-OFF；每个环境 3 个随机种子，每种子训练 2,500 个 epoch | 论文完整 12 个 D4RL 任务、5 种子正式统计 |
+| 动力学预测（Figure 2） | `hopper-medium-replay-v2`、`walker2d-medium-replay-v2`；ADM / Bootstrapping RNN / Ensemble；每个环境、模型均使用 3 个随机种子 | 在线 ADMPO-ON、完整 D4RL/NeoRL policy score 表、更多任务 |
+| 不确定性量化（Figure 4） | `hopper-medium-replay-v2`；ADM / Ensemble；3 个模型种子；5,000 个 Figure 2 test 初始窗口；`H=5`；random / fixed BC / deterministic learned SAC 三类策略 | Walker2d Figure 4、论文作者未公开的原始评估脚本口径 |
 
-### Figure 4
+论文在 Figure 4 中说明：从 random action、离线训练得到的 policy、以及数据集行为策略三类模型 rollout 中采样 state-action 点，比较 model error 与 model uncertainty；并报告 ADM 的相关系数高于 ensemble，且策略间区分更明显。[论文 §4.3.3](https://arxiv.org/html/2405.17031v1#S4.SS3.SSS3) 但没有公开 Figure 4 的精确 model-error 公式、点的采样方式、相关系数类型或原始评估代码。因此下文的 Figure 4 是根据论文内容进行的尝试。
 
-- 任务：`hopper-medium-replay-v2`。
-- 策略训练种子：`0, 1`。
-- 比较 ADM 与 Ensemble 在随机动作、学习策略和测试集动作三种分布下的误差—不确定性相关性。
-- 当前预算为3000 epochs；原计划5000 epochs未完整执行，最终 README 会明确标注这一计算预算偏差。
+## 结果概览
 
-### 未复现内容
+### 离线策略跑分：3 种子、2,500 个 epoch
 
-本项目不复现在线学习实验、完整 D4RL/NeoRL 性能表、附录全部消融、其余动力学基线及论文所有任务。当前结果属于明确缩小范围的部分复现。
+本项目还完成了 ADMPO-OFF 在两个 D4RL medium-replay 环境上的离线策略训练。每个环境独立训练 3 个种子、每种子 2,500 个 epoch；下图的空心点是末 10 个评估 epoch，彩色实心点为各 seed 的末期均值，黑色菱形是跨 seed 的均值与样本标准差。
 
-## Figure 2 最终评估口径（v3）
+<table>
+  <tr>
+    <td width="50%"><img src="docs/figures/policy_score_hopper.png" alt="Hopper 三种子最终 D4RL normalized score"/></td>
+    <td width="50%"><img src="docs/figures/policy_score_walker2d.png" alt="Walker2d 三种子最终 D4RL normalized score"/></td>
+  </tr>
+  <tr>
+    <td align="center">Hopper：末 10 个有效 epoch</td>
+    <td align="center">Walker2d：末 10 个 epoch</td>
+  </tr>
+</table>
 
-### 固定测试窗口
+| 任务 | 本项目末期 D4RL normalized score（3 seeds，mean ± sample SD） | 论文 ADMPO-OFF（5 seeds） | 判断 |
+| --- | ---: | ---: | --- |
+| Hopper-medium-replay-v2 | **102.28 ± 1.39** | 104.4 ± 0.4 | 接近论文，但仍略低；3 个种子并不足以替代论文的 5 种子统计 |
+| Walker2d-medium-replay-v2 | **86.81 ± 4.00** | 95.6 ± 2.1 | 明显偏低且跨种子不稳定，当前不视为成功复现 |
 
-- 每个任务从测试 episode 中按 `window_seed=202405` 无放回抽取20000个连续窗口。
-- 每个窗口包含5步初始历史、未来100步真实动作和对应真实未来状态。
-- 窗口不会跨越 episode 边界；若测试集不足20000个有效窗口，程序直接失败，不会通过有放回采样制造重复窗口。
-- “20000个窗口”不等于“20000个不同 episode”：不同窗口可能来自同一个测试 episode，也可能在时间上重叠。
+![三种子 2,500 epoch 的 Hopper 训练曲线](docs/figures/policy_training_hopper.png)
 
-### 20次独立随机 rollout
+![三种子 2,500 epoch 的 Walker2d 训练曲线](docs/figures/policy_training_walker2d.png)
 
-每个任务、训练种子、模型和固定窗口执行20次完整的100步随机 rollout：
+Hopper 的后期均值稳定在约 102，三个 seed 较为接近。Walker2d 则呈现更明显的两层不稳定性：一是 seed 2 的末期平均约为 82.5，显著低于 seed 0/1；二是单个 epoch 的评估回报具有频繁下探，导致末期 10 个点的样本标准差达到 4.00。它与论文表中 `95.6 ± 2.1` 的 5-seed 结果仍有约 8.8 分的差距。
 
-1. 每个 repeat 都从同一真实初始历史重新开始。
-2. ADM 与 RNN 在同一训练 seed、同一 repeat 中共享完全相同的随机 `k` 序列；每一步从 `1,…,m` 均匀抽取一个标量 `k`，整批窗口共用该步的 `k`。
-3. 不同 repeat 使用独立且可复现的 `k` 流和高斯噪声流；基础 `rollout_seed=202406`。
-4. ADM 和 RNN 都从模型输出的高斯分布采样下一状态，而不是使用预测均值。
-5. Ensemble 对每条窗口、每一步重新选择一个 elite，并从该 elite 的高斯分布采样下一状态。
-6. 模型预测状态递归反馈给自身；真实状态只作为同一步误差目标，不做 teacher forcing。
-7. 20000个窗口按最多4096条分块推理，但同一步所有分块共用同一个 `k`，分块不改变实验随机语义。
+这部分差距的解释包括：Walker2d 对模型 rollout 和 value target 的误差更敏感、2,500 epoch 下训练尚可能受模型质量和随机优化轨迹影响、以及当前仅 3 个种子的统计精度有限。目前可能的原因有训练轮次不足和ADM环境由于早停机制没有训练的很好。论文的 D4RL 表使用 5 个种子汇总，因此这里仅作方向性比较。[论文 Table 1](https://arxiv.org/html/2405.17031v1#S4.SS3.SSS1)
 
-每个 repeat 的曲线写入 `per_repeat/`；随后在同一训练 seed 内对20次 repeat 和20000个窗口做池化，生成唯一的 `per_seed/` 曲线。中断后使用 `--resume` 时，程序只复用已经写满100个 horizon 行的完整 model-repeat 组，不复用残缺组。
+### 动力学 rollout：Figure 2 类型实验
 
-### 指标与统计
+![Figure 2 类型实验：两环境、三个种子下的模型 rollout 预测误差](docs/figures/figure2_three_seed.png)
 
-- 单点误差：预测状态与数据集真实未来状态在原始状态维度上的 MSE。
-- 每个 seed 的 `error_mean`：20次 repeat × 20000窗口的池化均值。
-- `repeat_mean_std/sem`：20条 repeat 均值曲线的随机 rollout 波动，仅作诊断。
-- 主图均值和阴影：3个训练 seed 的均值与 SEM；repeat 不参与 `n_seeds`。
-- NaN、Inf 或超过 float32 上限的误差按配置截断并如实保留，不删除发散轨迹。
+图中的纵轴为项目评估器输出的 Prediction Error；每个点是在 3 个随机种子、每种子 20 次 rollout 重复下的均值与标准差。实验使用20,000个测试起始窗口和 100 步 rollout。
 
-## 模型与训练配置
+| 环境 | ADM | Bootstrapping RNN | Ensemble |
+| --- | ---: | ---: | ---: |
+| Hopper, 100 步 | 0.328 ± 0.040 | 0.317 ± 0.046 | 0.694 ± 0.008 |
+| Walker2d, 100 步 | 8.214 ± 0.299 | 10.740 ± 1.142 | 21,387.854 ± 30,213.829 |
 
-### ADM 与 Bootstrapping RNN
+在 Hopper 上，ADM 与相同 RNN 主干的 bootstrapping RNN 接近，且二者在 100 步时都低于 ensemble；这并没有完全复现论文中“ADM 始终明显更低”的曲线形态。在 Walker2d 上，ADM 的末端误差低于 RNN，而 ensemble 出现了很强的长时 rollout 发散，三个种子间标准差甚至高于均值。这一现象说明 Walker2d 结果目前并不稳定，不能把单个末端数值当作可靠的模型排序。论文所讨论的核心挑战正是 bootstrap rollout 的误差会随步数累积；本实现确实观察到了该敏感性，但幅度和各模型的相对曲线仍与原文存在差距。[论文 §4.1](https://arxiv.org/html/2405.17031v1#S4.SS1)
 
-- 3层 GRU，隐藏维度200，4个残差块，最大回溯长度 `m=5`。
-- batch size 256，Adam 学习率 `3e-4`。
-- 每次训练更新都从 `k∈{1,…,5}` 均匀随机采样；ADM 与 RNN 获得相同数量的优化器更新。
-- ADM 从起始状态与动作子序列预测任意步状态增量；RNN 从逐状态—动作历史预测下一状态。
-- 验证阶段分别计算全部 `k=1,…,5` 的误差，测试集不参与早停或模型选择。
+对应原始汇总：[`summary.csv`](results/figure2/trajectory_80_10_10_3seeds/stochastic_uniform_k_gaussian_20000starts_20repeats_v3/full/summary.csv)。
 
-### Ensemble
+### 不确定性量化：Figure 4 类型实验（Hopper）
 
-- 7个成员，选择验证误差最低的5个 elite。
-- 每个成员为4×200 Swish MLP，使用独立 bootstrap 采样和早停。
+![Figure 4 类型实验：Hopper 的 ADM 与 Ensemble 不确定性散点](docs/figures/figure4_hopper.png)
 
-所有 Figure 2 最终评估均复用已经训练完成的18个检查点，不因窗口数或 repeat 数变化而重新训练模型。
+该图使用所有 **87,843** 个有效原始点：ADM 43,909 个、Ensemble 43,934 个。绘图坐标范围固定为论文 Hopper 面板的 `Model Error ∈ [0, 1.5]`、`Model Uncertainty ∈ [0, 1]`，但图外点不会删除，所有有效点都会参与 CSV 导出和相关性计算。
 
-## Figure 4 当前口径
+| Hopper 面板的 pooled Pearson 相关性 | 本项目 | 论文图中报告值 |
+| --- | ---: | ---: |
+| ADM | 0.640 | 0.98 |
+| Ensemble | 0.648 | 0.94 |
 
-- ADMPO-OFF：`m=5`、模型 rollout horizon 5、惩罚系数0.1、real ratio 0.5、固定 `alpha=0.05`。
-- actor/critic：2×256；每 epoch 1000次更新；总预算3000 epochs。
-- 两个 seed 并行训练，并从各自1250-epoch检查点恢复；余弦调度器仍保留原5000-epoch调度长度，避免改变已经完成部分的优化轨迹。
-- 主误差：从共同真实初始状态出发后的累计轨迹 raw-state RMSE。
-- 主不确定性：不同回溯预测均值（ADM）或同一当前模型状态—动作下 elite 预测均值（Ensemble）的 RMS 分歧。
-- 三类动作：动作空间均匀随机、确定性 ADMPO 学习策略、连续测试窗口中的 D4RL 数据集动作。
-- 真实下一状态由 MuJoCo oracle 在当前模型状态处重建；局部一步误差和总方差指标作为附加诊断保存。
+本项目的 Spearman 相关性分别约为 ADM 0.962、Ensemble 0.970：主体点的排序关系较强，但少数高误差、低不确定性的 ADM 点会显著压低 Pearson 线性相关。策略水平呈现 **dataset / BC < learned SAC < random action** 的顺序；这说明 random 更容易进入高不确定性区域，但还没有得到论文所强调的“learned policy 最低、ADM 区分更清晰”的效果。
 
-## 环境与硬件
+对应原始数据：[`Hopper.csv`](results/figure4/hopper_20260813-131431/Hopper.csv)。
 
-### 本地 WSL
+## Figure 4 的复现协议
 
-- WSL：`Ubuntu-22.04-Recovery`
-- Conda 环境：`admpo`
-- Python 3.9、PyTorch 2.0.1+cu118
-- D4RL 1.1、Gym 0.23.1、mujoco-py 2.1.2.14
-- GPU：RTX 4060 Laptop 8 GB
-
-### RTX 5090 Figure 2 评估环境
-
-- Ubuntu 22.04、Python 3.10.20
-- PyTorch 2.8.0+cu128、NumPy 1.26.3、h5py 3.10.0、Matplotlib 3.8.2
-- GPU：RTX 5090 32 GB；驱动580.105.08；CUDA 12.8
-
-环境差异和完整包版本由每次运行 manifest 记录。Figure 2 只直接读取缓存 HDF5，不依赖 MuJoCo；Figure 4 必须使用本地 MuJoCo 环境。
-
-## 数据集与哈希
-
-数据默认放在 `~/.d4rl/datasets/`，不进入 Git。
-
-| 数据集文件 | 字节数 | SHA256 |
-|---|---:|---|
-| `hopper_medium_replay-v2.hdf5` | 75,854,457 | `e121c5f7c9857a307baa9edc6a2c3b48e85fedb9ac316ecddd0f48ca7ef4e39b` |
-| `walker2d_medium_replay-v2.hdf5` | 86,323,963 | `e75de96a4f77acf7d4e0d6fdf0d7ccb177c26c44bb4388e4fd99f543ccfa18db` |
-
-## 安装与检查
-
-```bash
-git submodule update --init --recursive
-python -m pip install -e . --no-deps
-python -m pytest -q
-python -m admpo_repro check --phase full
-```
-
-`vendor/ADMPO` 固定到提交 `68c28b9bbf6b95a801ebb30ea47294ad2d8d9cb3`。
-
-## 运行命令
-
-### Figure 2
-
-低成本端到端 smoke（8窗口、2 repeats、5步）：
-
-```bash
-python -m admpo_repro run figure2 --phase smoke --seeds 0 --workers 1 --resume
-```
-
-远端 pilot（Hopper seed 0、1000窗口、2 repeats）：
-
-```bash
-python -m admpo_repro run figure2 --phase pilot --seeds 0 --workers 1 --resume
-```
-
-正式 v3 评估（20000窗口、20 repeats、3种子；已有检查点全部复用）：
-
-```bash
-python -m admpo_repro run figure2 --phase full --seeds 0 1 2 --workers 1 --resume
-```
-
-从 `per_seed` CSV 重绘：
-
-```bash
-python -m admpo_repro plot figure2 --phase full
-```
-
-### Figure 4
-
-```bash
-python -m admpo_repro run figure4 --phase full --seeds 0 1 --workers 2 --resume
-python -m admpo_repro plot figure4 --phase full
-```
-
-## 结果与目录
-
-### Figure 2 已完成诊断版（1000窗口 × 1 repeat）
-
-![Figure 2 诊断版](results/figure2/trajectory_80_10_10_3seeds/stochastic_uniform_k_gaussian_1000starts_v2/full/figure2.png)
-
-step 100 的三种子均值：
-
-| 任务 | ADM | RNN | Ensemble | 判断 |
-|---|---:|---:|---:|---|
-| Hopper-medium-replay-v2 | **0.3643** | 0.3829 | 0.7479 | ADM均值最低，但仅比RNN低约4.9%，分离较弱 |
-| Walker2d-medium-replay-v2 | **8.3975** | 10.6484 | 42915.6254 | ADM明显更低；Ensemble随机 rollout 严重发散 |
-
-Hopper 的 ADM/RNN 曲线多次交叉，且 seed 2 的 step-100 ADM 略差于 RNN，因此诊断版只支持“平均趋势复现”，不能表述为稳定、显著优势。Walker2d 的 Ensemble 结果具有明显重尾和种子敏感性，项目保留原始结果，不筛选种子或缩放图像掩盖发散。
-
-诊断版提交：`810cbcc`；生成它的评估代码与配置提交：`c31ee88c8c6cdbb7ff1e5920bc89621c9fed8c47`。
-
-### Figure 2 v3 最终版（20000窗口 × 20 repeats）
-
-状态：**已完成并通过本地独立校验**。评估在 RTX 5090 上复用18个既有动力学检查点，没有重新训练；从启动、检查点复用、360个 model-repeat、汇总到绘图共耗时约10分09秒（2026-08-04 22:43:16—22:53:25，UTC+8）。Hopper 与 Walker2d 分别有24678和20231个合法候选窗口，均按固定种子无放回抽取20000个。
-
-![Figure 2 v3 最终版](results/figure2/trajectory_80_10_10_3seeds/stochastic_uniform_k_gaussian_20000starts_20repeats_v3/full/figure2.png)
-
-step 100 的三训练种子均值 ± 跨种子 SEM：
-
-| 任务 | ADM | RNN | Ensemble | 与论文趋势的对照 |
-|---|---:|---:|---:|---|
-| Hopper-medium-replay-v2 | 0.3277 ± 0.0231 | **0.3167 ± 0.0265** | 0.6937 ± 0.0044 | ADM显著优于Ensemble，但比RNN高约3.5%，未满足“ADM最低”的严格验收条件 |
-| Walker2d-medium-replay-v2 | **8.2143 ± 0.1729** | 10.7404 ± 0.6591 | 21387.8544 ± 17443.9624 | ADM最低，复现长期预测优势；Ensemble出现严重重尾发散 |
-
-因此，本项目将 Figure 2 判定为**部分复现**：Walker2d 完整支持论文主要趋势；Hopper 支持 ADM 相对 Ensemble 的优势，但 ADM 与 RNN 非常接近且排序与严格预期相反。项目不筛选种子、不删轨迹，也不通过调整坐标轴掩盖该结果。与1000窗口诊断版相比，Hopper 的 ADM、RNN、Ensemble step-100 均值分别从0.3643、0.3829、0.7479变为0.3277、0.3167、0.6937，说明增大 Monte Carlo 样本后 ADM/RNN 的细微排序发生了变化；Walker2d 的结论保持稳定。
-
-输出：
+论文 Eq.4 将不同回溯长度的概率预测视为一个 mixture，并使用预测总方差作为 ADM uncertainty：
 
 ```text
-results/figure2/trajectory_80_10_10_3seeds/
-└── stochastic_uniform_k_gaussian_20000starts_20repeats_v3/full/
-    ├── per_repeat/     # 每个任务—seed的20次随机曲线，6个CSV各6000行
-    ├── per_seed/       # repeat池化后的每seed曲线，主图只读取这里
-    ├── summary.csv     # 3个训练seed的均值、标准差和SEM，共600行
-    ├── figure2.png
-    └── figure2.pdf
+U(s, a) = || Var_i[μ_i(s, a)] + E_i[σ_i²(s, a)] ||₁
 ```
 
-对应 manifest：
+具体流程为：
 
-```text
-results/manifests/figure2-trajectory_80_10_10_3seeds-stochastic_uniform_k_gaussian_20000starts_20repeats_v3-full.json
+1. 从 Figure 2 的 held-out test trajectories 中固定抽取 5,000 个初始历史窗口；
+2. 对每个 ADM/Ensemble seed，分别以 random action、固定 BC、与对应 seed 的 deterministic SAC actor mean (`tanh(mean)`) 进行 5 步模型 rollout；
+3. 在 `H=5` 的 endpoint 上，以 MuJoCo oracle 得到真实下一状态；
+4. 对同一 state-action 的五路预测计算横轴误差和 Eq.4 纵轴不确定性；
+5. 汇合 3 个模型种子和三种策略的全部有效点，计算相关性，并原样输出 CSV/PDF。
+
+ADM 的 rollout 保持论文算法中的随机回溯思想，`k ∈ {1,…,5}` 在每个模型步均匀采样；论文也说明其 offline Hopper/Walker2d medium-replay 设置为 `m=5, H=5`。[论文 Algorithm 1](https://arxiv.org/html/2405.17031v1#S3) [论文 Appendix D.3](https://arxiv.org/html/2405.17031v1#S4.SS4)
+
+## 与论文差距的初步分析
+
+- **Figure 4 的口径仍有不可消除的公开信息缺口。** 论文没有给出横轴 model error 的公式，也没有公开点是否取每一步、轨迹末端、是否归一化、如何做相关性聚合。即使 Eq.4 已明确，横轴和采样的差异可能会改变 Pearson。
+- **当前 ADM 存在共同偏差。** 五个回溯来源可能在同一 state-action 上同时偏离真实状态；这种误差不会由来源间分歧充分反映，于是会产生“高 model error、低 Eq.4 uncertainty”的点。它可能是ADM相关性没有升到论文0.98的主要可见现象。
+- **策略分布不一定符合论文要求。** 本项目的 dataset policy 是固定 BC 代理，而不是直接重放每条数据集动作；learned policy 使用与 ADM seed 对应的 SAC actor mean。它们是可复现的控制变量，但仍可能与论文的 behavior policy 和训练细节不同，从而弱化三种策略的间隔。
+- **Figure 2 的 Walker2d 仍不稳定。** 从曲线图来看可能由于训练轮次不足够，导致训练过程并未能够收敛。
+- **Walker2d 的策略分数尚未实现。** 当前 86.81 ± 4.00 低于论文 95.6 ± 2.1，且最弱种子拖低末期均值。这与 Figure 2 中 Walker2d 长时模型 rollout 更敏感的观察一致。
+
+## 下一步可以尝试的点
+
+1. 将 Figure 4 的 error 计算、采样点和相关性聚合逐项做对照实验。
+2. 对于walker2d按照原论文规模进行训练。
+3. 若能获得作者的评估实现或更详细的实验记录，再对齐 Figure 4 的隐藏细节。
+
+我把这个项目作为一次训练尝试：不仅复现图形，也理解复现失败时究竟是实现、协议还是模型本身的问题。当前结果仍有明显差距，但这些差距提供了具体且可验证的后续研究方向；我愿意在进一步学习和获得指导后持续改进。
+
+## 运行 Figure 4
+
+Figure 4 的统一入口为：
+
+```bash
+python -m admpo_repro run figure4
 ```
 
-结果包 SHA256 为 `887592ac2ac4a01705c70c58573ed538dcddaefa1e0bdc3a1bf201de44fda80d`；PNG、summary CSV 和 manifest 的 SHA256 分别为 `faf1a573a88cd57e1ce085e541b63b1202b3311d993c7ecf6ac3c4fe00e7ea48`、`645aebd31c4cb7979dd922c721657587909fa6bd228d169829c63dda169274b7`、`2d2aad14b23b6d4ba82491e2c5203ddb977db2e91d8ad279720871fcc8b074e3`。本地校验确认每个 repeat CSV 恰有 `3模型 × 20 repeats × 100步 = 6000` 行，6个 seed CSV 各300行，无重复键、缺失 repeat、NaN 或 Inf。
 
-### Figure 4
-
-当前运行目录：
-
-```text
-runs/figure4/cumulative_rmse_std_hopper_2seeds_3000epochs/formal/
-```
-
-预期结果目录：
-
-```text
-results/figure4/cumulative_rmse_std_hopper_2seeds_3000epochs/full/
-```
-
-训练完成后将补充相关性表、散点图、每个 seed 的 Pearson `r`、均值±标准差及是否复现论文结论。
-
-## 仓库结构
-
-```text
-admpo-reproduction/
-├── README.md
-├── THIRD_PARTY.md
-├── configs/
-├── src/admpo_repro/
-│   ├── data/
-│   ├── dynamics/
-│   ├── evaluation/
-│   ├── plotting/
-│   └── policies/
-├── tests/
-├── results/
-│   ├── figure2/
-│   ├── figure4/
-│   └── manifests/
-├── runs/                 # 检查点与运行日志，Git忽略
-└── vendor/ADMPO/         # 固定官方子模块
-```
-
-模型检查点、TensorBoard日志、原始轨迹和 D4RL 数据集不提交 Git；PNG/PDF、聚合 CSV、必要的 repeat 诊断 CSV 和 manifest 可以提交。
-
-## 可复现性与已知限制
-
-- Python、NumPy、PyTorch CPU/CUDA、数据划分、窗口抽样、`k`、高斯噪声和 elite 选择均由记录的种子控制。
-- Figure 2 v3 的名义模型—窗口—步计算量约为诊断版的400倍，但 RTX 5090 上的分块批量推理实测全流程仅约10分09秒；该时间不包含模型训练。
-- 20000窗口可能相互重叠，因此窗口级 SEM 不能解释为20000条独立 episode 的统计显著性；主图只使用跨训练 seed SEM。
-- 3个训练 seed 少于原始五种子计划，跨 seed 不确定性估计仍较弱。
-- 论文与官方仓库没有公开完整 Figure 2 基线训练/评估脚本；RNN、Ensemble及部分训练细节参考同作者 ADM-v2 与 OfflineRL-Kit 重建。
-- PyTorch 2.8.0 是 RTX 5090 兼容性带来的环境偏差；本地 WSL 继续用 PyTorch 2.0.1 验证接口兼容。
-- Figure 4 采用3000而非5000 epochs，最终结论必须按缩减预算解释。
-
-第三方版本、固定提交及借鉴关系见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+命令固定使用 `cuda:0`、Hopper、3 个模型种子、5,000 个窗口与 `H=5`。最终目录只保留原始散点 CSV 和最终 PDF。
