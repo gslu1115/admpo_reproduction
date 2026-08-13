@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 
 from admpo_repro.config import load_config
-from admpo_repro.data import load_cached_d4rl_dataset, load_d4rl_dataset
+from admpo_repro.data import load_cached_d4rl_dataset
 from admpo_repro.dynamics.training import (
     build_dynamics,
     load_dynamics_checkpoint,
@@ -25,14 +25,8 @@ from admpo_repro.evaluation.figure2 import (
     load_completed_repeat_rows,
     write_figure2_rows,
 )
-from admpo_repro.evaluation.figure4 import (
-    collect_dataset_diagnostic,
-    collect_rollout_points,
-    write_figure4_rows,
-)
 from admpo_repro.manifest import environment_manifest, sha256, write_manifest
-from admpo_repro.plotting import plot_figure2, plot_figure4
-from admpo_repro.policies.admpo import load_learned_policy, train_admpo
+from admpo_repro.plotting import plot_figure2
 from admpo_repro.runtime import seed_everything
 
 
@@ -389,245 +383,20 @@ def run_figure2(config: dict, resume: bool, workers: int = 0) -> None:
     plot_figure2(root, result_dir=result_dir)
 
 
-def _figure4_scope(config: dict) -> str:
-    return "smoke" if config["phase"] == "smoke" else "formal"
-
-
-def _figure4_run_dir(root: Path, config: dict, task: str, seed: int) -> Path:
-    return (
-        root
-        / "runs"
-        / "figure4"
-        / config["artifact_namespace"]
-        / _figure4_scope(config)
-        / task
-        / f"seed-{seed}"
-    )
-
-
-def _figure4_result_dir(root: Path, config: dict) -> Path:
-    return (
-        root
-        / "results"
-        / "figure4"
-        / config["artifact_namespace"]
-        / config["phase"]
-    )
-
-
-def _prepare_figure4_models(
-    task: str, seed: int, fig2_config: dict
-) -> tuple[object, object, object, dict[str, Path]]:
-    """Load, but never retrain, corrected Figure 2 dynamics checkpoints."""
-
-    root = Path(fig2_config["root"])
-    seed_everything(seed)
-    dataset, env = load_d4rl_dataset(task, seed)
-    split = _figure2_split(dataset, fig2_config)
-    paths = _figure2_paths(root, fig2_config, task, seed)
-    expected_split = split.to_dict()
-    for kind in ("adm", "ensemble"):
-        path = paths[kind]
-        if not path.exists():
-            raise FileNotFoundError(
-                f"Figure 4 requires the corrected Figure 2 checkpoint: {path}"
-            )
-        payload = torch.load(path, map_location="cpu", weights_only=False)
-        if payload.get("split") != expected_split:
-            raise RuntimeError(
-                f"refusing Figure 4 checkpoint with a different trajectory split: {path}"
-            )
-    return dataset, env, split, paths
-
-
-def _run_figure4_job(config: dict, task: str, seed: int, resume: bool) -> dict:
-    started_at = datetime.now(timezone.utc).isoformat()
-    clock = time.perf_counter()
-    seed_everything(seed)
-    torch.set_num_threads(4)
-    fig2_config = load_config("figure2", "full", [seed])
-    dataset, env, split, paths = _prepare_figure4_models(
-        task, seed, fig2_config
-    )
-    try:
-        root = Path(config["root"])
-        policy_dir = _figure4_run_dir(root, config, task, seed) / "admpo"
-        final_policy = policy_dir / "final.pt"
-        if not (resume and final_policy.exists()):
-            final_policy = train_admpo(
-                dataset, env, config, seed, paths["adm"], policy_dir, resume
-            )
-        learned = load_learned_policy(dataset, env, config, final_policy)
-        rows, diagnostics = [], []
-        for kind in ("adm", "ensemble"):
-            model = load_dynamics_checkpoint(
-                kind, dataset, fig2_config, paths[kind]
-            )
-            for policy_name, policy in (
-                ("random", None),
-                ("learned", learned),
-                ("dataset", None),
-            ):
-                rows.extend(
-                    collect_rollout_points(
-                        task,
-                        kind,
-                        model,
-                        policy_name,
-                        policy,
-                        dataset,
-                        split,
-                        env,
-                        seed,
-                        config,
-                    )
-                )
-            diagnostics.extend(
-                collect_dataset_diagnostic(
-                    task,
-                    kind,
-                    model,
-                    dataset,
-                    split,
-                    env,
-                    seed,
-                    config,
-                )
-            )
-            del model
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        result_dir = _figure4_result_dir(root, config)
-        output = result_dir / "points" / f"{task}_seed-{seed}.csv"
-        diagnostic_output = (
-            result_dir / "diagnostics" / f"{task}_seed-{seed}.csv"
-        )
-        write_figure4_rows(rows, output)
-        write_figure4_rows(diagnostics, diagnostic_output)
-        return {
-            "task": task,
-            "seed": seed,
-            "started_at": started_at,
-            "finished_at": datetime.now(timezone.utc).isoformat(),
-            "duration_seconds": time.perf_counter() - clock,
-            "points": len(rows),
-            "diagnostic_points": len(diagnostics),
-            "policy_checkpoint": str(final_policy),
-            "dynamics_checkpoints": {
-                kind: {"path": str(paths[kind]), "sha256": sha256(paths[kind])}
-                for kind in ("adm", "ensemble")
-            },
-            "output": str(output),
-            "diagnostic_output": str(diagnostic_output),
-        }
-    finally:
-        env.close()
-
-
-def _figure4_worker_count(config: dict, requested_workers: int, jobs: int) -> int:
-    if config["phase"] in ("smoke", "pilot"):
-        return 1
-    configured = int(config.get("parallel", {}).get("max_workers", 2))
-    workers = requested_workers if requested_workers > 0 else configured
-    return max(1, min(workers, configured, jobs))
-
-
-def _run_figure4_stage(jobs: list[tuple], workers: int) -> list[dict]:
-    if workers == 1:
-        results = []
-        for job in jobs:
-            result = _run_figure4_job(*job)
-            print(
-                json.dumps(
-                    {"event": "figure4_job_finished", **result},
-                    ensure_ascii=False,
-                ),
-                flush=True,
-            )
-            results.append(result)
-        return results
-    context = multiprocessing.get_context("spawn")
-    results: list[dict] = []
-    with concurrent.futures.ProcessPoolExecutor(
-        max_workers=workers, mp_context=context
-    ) as executor:
-        futures = {executor.submit(_run_figure4_job, *job): job for job in jobs}
-        for future in concurrent.futures.as_completed(futures):
-            result = future.result()
-            print(
-                json.dumps(
-                    {"event": "figure4_job_finished", **result},
-                    ensure_ascii=False,
-                ),
-                flush=True,
-            )
-            results.append(result)
-    return results
-
-
-def run_figure4(config: dict, resume: bool, workers: int = 0) -> None:
-    root = Path(config["root"])
-    jobs = [
-        (config, task, seed, resume)
-        for task in config["tasks"]
-        for seed in config["seeds"]
-    ]
-    worker_count = _figure4_worker_count(config, workers, len(jobs))
-    manifest = environment_manifest(root)
-    manifest.update(
-        {
-            "experiment": "figure4",
-            "protocol": config["protocol"],
-            "artifact_namespace": config["artifact_namespace"],
-            "phase": config["phase"],
-            "seeds": config["seeds"],
-            "tasks": config["tasks"],
-            "config_sha256": sha256(root / "configs" / "figure4.yaml"),
-            "primary_metric": {
-                "error": "cumulative trajectory raw-state RMSE",
-                "uncertainty": "RMS disagreement of predictive means",
-            },
-            "action_sources": {
-                "random": "uniform legal action sampled independently per step",
-                "learned": "deterministic ADMPO policy action at current model state",
-                "dataset": "open-loop contiguous held-out D4RL action sequence",
-            },
-            "secondary_metrics": [
-                "local one-step RMSE versus MuJoCo reconstructed at the model state",
-                "trajectory and local MSE versus predictive-mean variance",
-                "aleatoric-plus-epistemic total uncertainty",
-                "within-policy and within-rollout-step centered correlations",
-            ],
-            "parallel_workers": worker_count,
-            "runs": [],
-        }
-    )
-    manifest["runs"] = _run_figure4_stage(jobs, worker_count)
-    manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
-    manifest_path = (
-        root
-        / "results"
-        / "manifests"
-        / f"figure4-{config['artifact_namespace']}-{config['phase']}.json"
-    )
-    write_manifest(manifest_path, manifest)
-    plot_figure4(root, result_dir=_figure4_result_dir(root, config))
-
-
 def run_experiment(
     experiment: str,
     phase: str,
     seeds: list[int] | None,
     resume: bool,
     workers: int = 0,
+    namespace: str | None = None,
 ) -> None:
+    if experiment != "figure2":
+        raise ValueError(f"runner only handles Figure 2, got {experiment!r}")
     config = load_config(experiment, phase, seeds)
-    if experiment == "figure2":
-        run_figure2(config, resume, workers)
-    elif experiment == "figure4":
-        run_figure4(config, resume, workers)
-    else:
-        raise ValueError(experiment)
+    if namespace:
+        config["artifact_namespace"] = namespace
+    run_figure2(config, resume, workers)
 
 
 def check_environment(phase: str = "smoke") -> dict:
@@ -652,9 +421,13 @@ def check_environment(phase: str = "smoke") -> dict:
     return report
 
 
-def plot_experiment(experiment: str, phase: str = "full") -> tuple[Path, Path]:
+def plot_experiment(
+    experiment: str, phase: str = "full", namespace: str | None = None
+) -> tuple[Path, Path]:
+    if experiment != "figure2":
+        raise ValueError(f"only Figure 2 supports standalone replotting, got {experiment!r}")
     config = load_config(experiment, phase)
+    if namespace:
+        config["artifact_namespace"] = namespace
     root = Path(config["root"])
-    if experiment == "figure2":
-        return plot_figure2(root, result_dir=_figure2_result_dir(root, config))
-    return plot_figure4(root, result_dir=_figure4_result_dir(root, config))
+    return plot_figure2(root, result_dir=_figure2_result_dir(root, config))
