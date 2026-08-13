@@ -1,0 +1,22 @@
+name: admpo
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.9
+  - pip
+  - pytorch=2.0.1
+  - pytorch-cuda=11.8
+  - numpy=1.26.4
+  - h5py=3.10.0
+  - pyyaml=6.0.1
+  - matplotlib=3.8.2
+  - pillow
+  - cython<3
+  - patchelf
+  - pip:
+      - gym==0.23.1
+      - d4rl==1.1
+      - mujoco-py==2.1.2.14
+      - pytest==8.3.5
